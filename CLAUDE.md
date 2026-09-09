@@ -717,13 +717,26 @@ from inline SVG source via ImageMagick `convert` + Pillow; run
   (gitignored) as ES modules for `background.js` to import. Convention:
   anything under `src/` that the extension imports must be covered by that
   `include` — listing individual files instead of the `src` directory
-  silently omits new ones (no compile error, only a runtime
-  module-not-found in the service worker), which is what happened to
-  `csrf.ts` before this was fixed. The same gitignored-but-imported
-  relationship means packaging must run `npm run build` immediately
-  before zipping: a naive zip from a fresh clone ships an
-  `extension/lib/` that doesn't exist, and it fails at runtime with no
-  compile-time error — the identical failure mode.
+  silently omits new ones (no compile error, only a missing module in the
+  service worker), which is what happened to `csrf.ts` before this was
+  fixed. The same gitignored-but-imported relationship means packaging must
+  run `npm run build` immediately before zipping: a naive zip from a fresh
+  clone ships an `extension/lib/` that doesn't exist — the identical failure
+  mode, and with no compile-time error either way.
+
+  **That failure is at registration, not at first use.** `background.js` is
+  a module service worker, so Chromium fetches its whole static import graph
+  before registering it; a missing `lib/` therefore surfaces as
+  `Service worker registration failed. Status code: 3` (`kErrorStartWorkerFailed`,
+  `third_party/blink/public/common/service_worker/service_worker_status_code.h`)
+  plus `An unknown error occurred when fetching the script.` Earlier docs here
+  described it as loading fine and failing later at the button click; that was
+  wrong, and it made a real bug report hard to triage. The status code
+  discriminates: **3** is a fetch-stage failure (a file in the import graph
+  could not be retrieved), whereas a top-level throw in a script that *was*
+  fetched gives **15** (`kErrorScriptEvaluateFailed`). Note also that the
+  `chrome://extensions` Errors pane retains stale entries after the files are
+  fixed — Clear all, then Remove and re-add, rather than trusting reload.
 - Tests: vitest, `npx vitest run` (or `npm test`). Pure functions
   (`base64.ts`, `csrf.ts`, `tenant.ts`, `classify.ts`, `origins.ts`) are
   unit-tested. Test
