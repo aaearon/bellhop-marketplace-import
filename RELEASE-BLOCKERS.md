@@ -21,8 +21,8 @@ What stands between this spike and a public Chrome Web Store release, grouped by
 - [ ] **No fetch timeouts.** Neither the S3 fetch nor the import POST has a timeout. Risk: a hung request leaves the button reading "Importing…" indefinitely, with no way for the user to know it failed or retry.
 - [ ] **No CI.** Nothing runs `tsc` or `vitest` automatically; no ESLint/Prettier config exists despite being a stated project convention. Risk: a regression or type error ships unnoticed; style drifts with no enforcement.
 - [ ] **No test coverage for `extension/content.js` or `extension/background.js`.** Only the pure `src/` modules are unit-tested; the DOM/network paths are validated manually only. Risk: the highest-risk, most-changed code paths have no regression safety net. (The origin-allowlist security check is being moved into `src/` with tests in a parallel task.)
-- [ ] **Packaging does not exclude `recon/`.** `recon/` is a MAIN-world diagnostic observer that logs full request URLs, including presigned S3 URLs carrying live AWS credentials in the query string. Risk: shipping it in a store package leaks a live diagnostic/logging tool (and potentially credential-bearing URLs) to end users.
-- [ ] **No extension icons; version is a static `0.1.0`.** No icon set, no versioning or release process. Risk: unpolished/rejected store listing, and no way to distinguish or roll back releases once published.
+- [x] ~~**Packaging does not exclude `recon/`.**~~ — **resolved: `recon/` has been deleted from the repository outright**, not merely excluded from packaging. It was a MAIN-world diagnostic observer used during development to discover the marketplace's iframe API calls; contrary to an earlier note here, it never logged full request URLs — it redacted query-string values (including the presigned S3 link's embedded AWS credentials) before logging, and was removed once discovery was complete. See "How the marketplace API was found" in `CLAUDE.md`.
+- [ ] **No versioning or release process.** An icon set exists (`extension/icons/`, the Bellhop mascot), so that part of this item is done. What's still missing: the version is edited by hand in `extension/manifest.json` and `package.json` with nothing enforcing they stay in sync, and there is no tag/release workflow. Risk: no way to distinguish or roll back releases once published.
 
 ## Optional / later
 
@@ -37,4 +37,4 @@ What stands between this spike and a public Chrome Web Store release, grouped by
 - Artifact origin is derived from the download URL at runtime and requested per-host; no vendor-internal bucket name is baked into the manifest.
 - End-to-end import of a PSM connection component on a CPM tenant as super admin, including the confirmation dialog, per-tenant optional permission grant, and CSRF handling.
 - Duplicate import is refused, not silently overwritten: `HTTP 409`, `ErrorCode CAWS00001E`. The existing failure path surfaces it, so no pre-flight check is required.
-- 83 unit tests over the pure modules (`base64.ts`, `csrf.ts`, `tenant.ts`, `classify.ts`, `origins.ts`), including the origin allowlist that gates permission requests.
+- 86 unit tests over the pure modules (`base64.ts`, `csrf.ts`, `tenant.ts`, `classify.ts`, `origins.ts`), including the origin allowlist that gates permission requests.

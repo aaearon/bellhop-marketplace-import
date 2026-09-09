@@ -29,7 +29,7 @@ export function classifyProduct(detail: unknown): ProductKind | null {
 
   if (isConnectionComponent && isPlatform) {
     console.log(
-      "[classify] ambiguous product: idiraServices contains both a PSM marker and a CPM/SRS marker; failing closed.",
+      "[bellhop] classify: ambiguous product: idiraServices contains both a PSM marker and a CPM/SRS marker; failing closed.",
       services
     );
     return null;

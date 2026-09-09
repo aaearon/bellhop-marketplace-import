@@ -3,3 +3,15 @@ node_modules/
 .DS_Store
 dist/
 extension/lib/
+
+# Signing keys and secrets — never commit these.
+*.pem
+*.crx
+.env
+
+# Logs, editor/OS cruft, coverage output.
+*.log
+.vscode/
+.idea/
+Thumbs.db
+coverage/

@@ -556,11 +556,6 @@ A `webextension-polyfill` dependency is not warranted for any of this — a
 3-line `var api = typeof browser !== "undefined" ? browser : chrome;` shim
 covers it and preserves the no-bundler convention.
 
-`recon/` must never be included in a shipped package, on Chrome, Edge, or a
-future Firefox build: it is a separate extension with its own manifest and
-it logs full request URLs, including the presigned S3 link that carries
-live AWS credentials in its query string (see recon/ below).
-
 ## Future direction
 
 The Idira Marketplace carries integrations for all of the platform's
@@ -619,14 +614,21 @@ from inline SVG source via ImageMagick `convert` + Pillow; run
   iframe. This breadth is harmless — a content-script match is not a host
   permission (see Permissions).
 
-## recon/
+## How the marketplace API was found
 
-`recon/` is a throwaway, MAIN-world diagnostic extension used to discover the
-iframe API calls above — tab-level network capture does not see fetch/XHR
-originating inside cross-origin iframes; only a content script with
-`all_frames: true` does.
+The API calls documented above (see Marketplace API) were found using a throwaway,
+MAIN-world diagnostic browser extension that has since been removed from this
+repository — it was a discovery tool, not part of the product. It was needed
+because tab-level network capture does not see fetch/XHR calls originating
+inside a cross-origin iframe; only a content script with `all_frames: true`
+does, so the marketplace's calls had to be observed from inside the iframe
+itself rather than from the tab's own network panel. It redacted request URLs
+before logging them — query-string values, including the presigned S3
+download link's embedded AWS credentials, were replaced with a
+length-only placeholder, never logged in the clear — and was deleted once
+discovery was complete rather than kept in the tree. The insight above is
+what mattered; the tool itself was never meant to ship.
 
-Security caveat: `recon/observer.js` logs full request URLs, and the
-presigned S3 download URL carries live AWS credentials in its query string.
-Unload `recon/` when not actively diagnosing, and redact query-string values
-if it's ever reused.
+Cookie and URL logging in the shipped extension follows the same policy:
+presigned/credentialed URLs are redacted before they ever reach a log, and
+cookie diagnostics report names and domains only, never values (see Auth).
