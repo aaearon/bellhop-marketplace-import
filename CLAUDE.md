@@ -546,9 +546,16 @@ header leaked the session guid in a header name. It sends one now.
   covered by the unit tests, which only reach the pure functions in `src/`.
 - A granted tenant stays granted until revoked in `chrome://extensions`.
   Nothing in the extension surfaces or revokes grants, by design.
-- The service worker has a ~30s idle lifetime; the one artifact tested was
-  308 KB. A much larger artifact may need an offscreen document to survive
-  the fetch + base64 encode.
+- The service worker has a ~30s idle lifetime and a 30s cap on any single
+  `fetch()`; the one artifact tested was 308 KB. **Encode CPU is not the
+  binding constraint** — measured, `arrayBufferToBase64` costs ~45-50 ms/MB,
+  so encoding alone would not approach 30s until several hundred MB. Memory
+  is: peak heap is roughly 3.8x the artifact size, because the ArrayBuffer,
+  the latin1 binary string, the base64 string and the JSON request body are
+  all live at once (~470 MB for a 128 MB artifact). The S3 download is
+  subject to the same 30s single-fetch cap. An artifact in the tens of MB is
+  where this becomes a real risk, and an offscreen document or a streaming
+  encode would be needed.
 - Product type is inferred, not declared (see Classification). This is a
   heuristic derived from two observed payloads and may misclassify a shape
   not yet seen.

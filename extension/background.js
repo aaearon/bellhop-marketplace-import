@@ -193,12 +193,11 @@ async function handleImport(msg, sender) {
   // this message. The worker holds no `cookies` permission and makes no
   // chrome.cookies call.
   //
-  // findXsrfCookie is called WITHOUT a targetHost, deliberately: document.cookie
-  // exposes no domain field, so there is nothing to rank candidates by. That
-  // is the exactly-one-candidate-or-null branch — more than one candidate may
-  // belong to different tenants, so ambiguity fails closed rather than
-  // guessing. The content script's own name filter is only a prefix test; the
-  // authoritative XSRF-TOKEN-<guid> match is this call.
+  // findXsrfCookie selects exactly one candidate or returns null. document.cookie
+  // exposes no domain field, so there is nothing to rank candidates by — more
+  // than one candidate may belong to different tenants, so ambiguity fails
+  // closed rather than guessing. The content script's own name filter is only a
+  // prefix test; the authoritative XSRF-TOKEN-<guid> match is this call.
   // Element shape is validated, not just the array: findXsrfCookie reads
   // `.name` off every element, so one null or malformed entry would throw a
   // TypeError and surface as a generic unexpected error instead of the
