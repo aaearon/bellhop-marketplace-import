@@ -16,7 +16,7 @@ Idira is the Idira Identity Security Platform (formerly the CyberArk Identity Se
 Platform); Marketplace and Privilege Cloud are services of that one platform, sharing a tenant
 and session.
 
-Adds an "Import to tenant" button next to Download on marketplace
+Adds an "Import to Privilege Cloud" button next to Download on marketplace
 connection-component product pages; the background service worker
 downloads the signed zip and POSTs it to the tenant's
 ConnectionComponents/Import endpoint.

@@ -1,4 +1,4 @@
-// Import to tenant - background service worker (MV3, ES module)
+// Bellhop - background service worker (MV3, ES module)
 
 import { deriveOrigins } from './lib/tenant.js';
 import { arrayBufferToBase64 } from './lib/base64.js';

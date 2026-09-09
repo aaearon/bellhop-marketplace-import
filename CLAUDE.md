@@ -3,7 +3,7 @@
 ## What this is
 
 Bellhop is a Chrome MV3 extension spike: it adds an
-"Import to tenant" button beside the "Download" button on Idira marketplace
+"Import to Privilege Cloud" button beside the "Download" button on Idira marketplace
 product pages. Instead of downloading the artifact zip and hand-uploading
 it, the button imports it directly into the same tenant's Privilege Cloud.
 Supports both connection components and platforms (see Classification
@@ -294,7 +294,7 @@ revocable under Site access in `chrome://extensions`.
 
 ## Confirmation dialog
 
-Clicking "Import to tenant" opens a DOM confirmation dialog (built inline in
+Clicking "Import to Privilege Cloud" opens a DOM confirmation dialog (built inline in
 `content.js`, not `window.confirm`) instead of importing immediately; only
 its Import button starts the request. It names the product, the kind, and
 the destination tenant/host before any write happens. This exists because
@@ -309,7 +309,7 @@ where `permissions.contains()` is asked, both `await`ed before the dialog
 renders — see Sequencing under Artifact origin for why that point and not
 another, and for the disabled/error state when the url cannot be resolved.
 
-Because that open is `await`ed rather than instant, the "Import to tenant"
+Because that open is `await`ed rather than instant, the "Import to Privilege Cloud"
 button shows its own loading state (disabled, small inline CSS spinner,
 "Preparing…") for exactly that gap, cleared as soon as `openConfirmDialog`
 returns — on every path, including a failed pre-dialog fetch or a thrown

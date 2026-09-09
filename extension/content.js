@@ -1,4 +1,4 @@
-// Import to tenant - content script (marketplace SPA iframe, ISOLATED world)
+// Bellhop - content script (marketplace SPA iframe, ISOLATED world)
 // Plain script, no imports/exports.
 
 (function () {
@@ -12,7 +12,7 @@
   }
 
   var BTN_ID = "import-to-tenant-btn";
-  var IMPORT_BTN_LABEL = "Import to tenant";
+  var IMPORT_BTN_LABEL = "Import to Privilege Cloud";
   var loggedProductDetail = false;
   var loggedDownloadResponse = false;
 
