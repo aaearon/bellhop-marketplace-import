@@ -79,8 +79,14 @@ Relative to the marketplace iframe origin:
   presigned AWS S3 link (600s TTL) on an origin outside `cyberark.cloud`. That
   origin is not stable and is never hardcoded — see Artifact origin, which also
   covers why this endpoint is called at dialog-open.
-  `fileName`/`sha256` are empty in practice — there is no integrity check
-  available from this endpoint. Do not add a fake one.
+  `sha256` was empty on the payloads this was built against, but was
+  **observed populated** (a real 64-hex digest) on 2026-09-09. Treat it as
+  sometimes-present: an integrity check against the fetched bytes before the
+  import POST now looks possible and is worth building, but it must degrade to
+  importing without verification when the field is absent, or it will fail
+  closed on products that still return `""`. Nothing verifies it today.
+  `fileName` is still empty in practice. Do not invent a digest that the
+  endpoint did not supply.
 
 ## Classification
 
@@ -230,14 +236,13 @@ AWS-hosted origin at once.
 
 ## Artifact origin
 
-The artifact origin is **derived at runtime, never hardcoded**. It used to be
-the literal bucket
-`jenkinsmarketplacemaster-prod-content-eu-west-2.s3.eu-west-2.amazonaws.com`,
-pinned in both `optional_host_permissions` and the worker's allowlist. That is
-a Jenkins-generated internal bucket name and it changes without notice: when it
-changed, every installed copy of the extension broke silently, and the only fix
-was shipping a store update. The manifest now declares only
-`https://*.amazonaws.com/*`, and the concrete origin is worked out per import.
+The artifact origin is **derived at runtime, never hardcoded**. A
+Jenkins-generated internal bucket name such as
+`jenkinsmarketplacemaster-prod-content-eu-west-2.s3.eu-west-2.amazonaws.com`
+changes without notice: hardcoding it means every installed copy of the
+extension breaks silently, fixable only by a store update. The manifest
+declares only `https://*.amazonaws.com/*`, and the concrete origin is worked
+out per import.
 
 **The service worker derives it itself**, in `originsToRequest`
 (`extension/background.js`), from the presigned download url it is about to
@@ -325,27 +330,10 @@ that none did) so a future break is diagnosable from the console rather than
 by bisecting.
 
 Observed live against `acme-poc`, product-info page for a
-connection-component product (Oracle SQL Developer for VS Code), by
-temporarily instrumenting the content script itself to dump the Download
-button and its ancestors to the console — the outer browser-automation
-tooling used to drive this investigation could not see into the marketplace
-iframe at all (see below). The portal is React/PrimeReact under the hood
-(`p-button`, `p-component`, `data-pc-*`), **not** Angular — there is no
-`_ngcontent-*` anywhere in the observed markup, contrary to an earlier
-assumption. Observed markup:
-
-```html
-<div class="item-header__row">
-  <div class="item-header__identity">…logo, title, "By: Idira"…</div>
-  <button aria-label="Download" class="p-button p-component p-button-lg"
-          type="button" data-testid="item-download"
-          data-pc-name="button" data-pc-section="root">
-    <span class="p-button-icon p-c p-button-icon-left cyb-icon-size-sm cyb-icon-download-04"
-          data-pc-section="icon"></span>
-    <span class="p-button-label p-c" data-pc-section="label">Download</span>
-  </button>
-</div>
-```
+connection-component product (Oracle SQL Developer for VS Code). The portal
+is React/PrimeReact under the hood (`p-button`, `p-component`, `data-pc-*`),
+**not** Angular — there is no `_ngcontent-*` anywhere in the observed
+markup.
 
 1. **`[data-testid="item-download"]`** — OBSERVED. The most durable signal
    found: a vendor test id, generally stable across localisation/copy
@@ -377,19 +365,13 @@ via a `setButtonLabel` helper, falling back to plain `textContent` on the
 button — with a console warning at construction time — if that span is ever
 missing.
 
-**Tooling note:** the `read_page`/`find` browser-automation tools could not
-reach into the product page's DOM at all in this session — it sits inside a
-doubly-nested cross-origin iframe
-(`<t>.cyberark.cloud` → `<t>-managespace.cyberark.cloud` →
-`<t>-marketplace.cyberark.cloud`) and those tools returned only the shell's
-own accessibility tree no matter the wait time, tab, or query. Console log
-capture (`read_console_messages`) does reach across that boundary, since
-`chrome.runtime` messages from the content script's own isolated-world
-execution surface there regardless of frame origin. The DOM dump above was
-obtained by temporarily adding diagnostic `console.log` calls to
-`extension/content.js` itself (reloading the unpacked extension to pick them
-up) rather than by external inspection — that diagnostic code has been
-removed from the shipped file.
+Note for future debugging: the product page's DOM sits inside a doubly-nested
+cross-origin iframe (`<t>.cyberark.cloud` → `<t>-managespace.cyberark.cloud`
+→ `<t>-marketplace.cyberark.cloud`), which DOM-inspection browser-automation
+tools cannot reach into, returning only the shell's accessibility tree;
+console log capture does reach across that boundary, since `chrome.runtime`
+messages from the content script's own isolated-world execution surface
+there regardless of frame origin.
 
 ## Auth
 
@@ -508,8 +490,7 @@ time and re-testing.
 ## Browser support
 
 Chrome and Edge are the supported targets. Firefox is shelved — not ruled
-out permanently, just not being worked on now — on one hard blocker found
-this session.
+out permanently, just not being worked on now — on one hard blocker.
 
 **Edge — drop-in, no code changes.** Edge Add-ons runs the unmodified
 Chromium extensions implementation, so `chrome.permissions.request()`/
@@ -627,18 +608,14 @@ from inline SVG source via ImageMagick `convert` + Pillow; run
 
 ## How the marketplace API was found
 
-The API calls documented above (see Marketplace API) were found using a throwaway,
-MAIN-world diagnostic browser extension that has since been removed from this
-repository — it was a discovery tool, not part of the product. It was needed
-because tab-level network capture does not see fetch/XHR calls originating
-inside a cross-origin iframe; only a content script with `all_frames: true`
-does, so the marketplace's calls had to be observed from inside the iframe
-itself rather than from the tab's own network panel. It redacted request URLs
-before logging them — query-string values, including the presigned S3
-download link's embedded AWS credentials, were replaced with a
-length-only placeholder, never logged in the clear — and was deleted once
-discovery was complete rather than kept in the tree. The insight above is
-what mattered; the tool itself was never meant to ship.
+The API calls documented above (see Marketplace API) were found using a
+throwaway, MAIN-world diagnostic browser extension, since removed from this
+repository. It was needed because tab-level network capture does not see
+fetch/XHR calls originating inside a cross-origin iframe; only a content
+script with `all_frames: true` does. It redacted request URLs before
+logging — query-string values, including the presigned S3 download link's
+embedded AWS credentials, were replaced with a length-only placeholder,
+never logged in the clear.
 
 Cookie and URL logging in the shipped extension follows the same policy:
 presigned/credentialed URLs are redacted before they ever reach a log, and
