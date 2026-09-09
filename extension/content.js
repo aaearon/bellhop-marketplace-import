@@ -227,12 +227,19 @@
   // handleImportClick.
   var S3_ORIGIN_PATTERN =
     "https://jenkinsmarketplacemaster-prod-content-eu-west-2.s3.eu-west-2.amazonaws.com/*";
+  // The bare apex, and only the bare apex. The tenant's XSRF-TOKEN-<guid> is a
+  // parent-domain (.cyberark.cloud) SSO cookie, and chrome.cookies gates read
+  // access on the cookie's own domain scope rather than the url passed to
+  // getAll() — so without this grant the token is unreadable even with the
+  // exact pcloud origin granted. It confers nothing on any tenant subdomain.
+  var APEX_ORIGIN_PATTERN = "https://cyberark.cloud/*";
 
   function requiredOriginPatterns(classification) {
     var patterns = [];
     if (classification && typeof classification.pcloudOrigin === "string" && classification.pcloudOrigin) {
       patterns.push(classification.pcloudOrigin.replace(/\/+$/, "") + "/*");
     }
+    patterns.push(APEX_ORIGIN_PATTERN);
     patterns.push(S3_ORIGIN_PATTERN);
     return patterns;
   }

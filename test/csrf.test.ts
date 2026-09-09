@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { findXsrfCookie, xsrfCandidateNames } from "../src/csrf.js";
+import { cookieDomains, findXsrfCookie, xsrfCandidateNames } from "../src/csrf.js";
 
 describe("findXsrfCookie", () => {
   it("1. finds an exact guid-suffixed match", () => {
@@ -245,5 +245,43 @@ describe("xsrfCandidateNames", () => {
   it("19. returns an empty array when there are no candidates", () => {
     expect(xsrfCandidateNames([{ name: "session", value: "abc" }])).toEqual([]);
     expect(xsrfCandidateNames([])).toEqual([]);
+  });
+});
+
+describe("cookieDomains", () => {
+  it("20. returns the distinct domain values in first-seen order", () => {
+    const cookies = [
+      { name: "session", value: "abc", domain: ".cyberark.cloud" },
+      {
+        name: "XSRF-TOKEN-11111111-1111-1111-1111-111111111111",
+        value: "secret1",
+        domain: ".cyberark.cloud",
+      },
+      { name: "other", value: "def", domain: "tenant1-pcloud.cyberark.cloud" },
+    ];
+    expect(cookieDomains(cookies)).toEqual([
+      ".cyberark.cloud",
+      "tenant1-pcloud.cyberark.cloud",
+    ]);
+  });
+
+  it("21. skips cookies with a missing or empty domain and returns [] for an empty jar", () => {
+    expect(
+      cookieDomains([
+        { name: "a", value: "1" },
+        { name: "b", value: "2", domain: "" },
+        { name: "c", value: "3", domain: "tenant1.cyberark.cloud" },
+      ])
+    ).toEqual(["tenant1.cyberark.cloud"]);
+    expect(cookieDomains([])).toEqual([]);
+  });
+
+  it("22. never exposes a cookie name or value", () => {
+    const cookies = [
+      { name: "XSRF-TOKEN-11111111-1111-1111-1111-111111111111", value: "secret1", domain: ".cyberark.cloud" },
+    ];
+    const out = cookieDomains(cookies).join(",");
+    expect(out).not.toContain("secret1");
+    expect(out).not.toContain("XSRF-TOKEN");
   });
 });

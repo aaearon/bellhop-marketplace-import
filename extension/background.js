@@ -2,7 +2,7 @@
 
 import { deriveOrigins } from './lib/tenant.js';
 import { arrayBufferToBase64 } from './lib/base64.js';
-import { findXsrfCookie, xsrfCandidateNames } from './lib/csrf.js';
+import { cookieDomains, findXsrfCookie, xsrfCandidateNames } from './lib/csrf.js';
 import { classifyProduct, importPathFor } from './lib/classify.js';
 
 function safeUrlForLog(url) {
@@ -19,7 +19,7 @@ function isValidKind(kind) {
 }
 
 // --- optional host permissions -------------------------------------------
-// The only two origin patterns this extension ever needs. Anything else is
+// The only three origin patterns this extension ever needs. Anything else is
 // refused before chrome.permissions.request() is called, so a compromised or
 // buggy caller cannot use the extension to solicit the wildcard
 // `https://*.cyberark.cloud/*` that optional_host_permissions declares (i.e.
@@ -28,12 +28,24 @@ function isValidKind(kind) {
 var S3_ORIGIN_PATTERN =
   "https://jenkinsmarketplacemaster-prod-content-eu-west-2.s3.eu-west-2.amazonaws.com/*";
 var PCLOUD_ORIGIN_PATTERN_RE = /^https:\/\/[a-z0-9-]+-pcloud\.cyberark\.cloud\/\*$/;
+// The bare APEX, matched as an exact literal — never a regex, never a
+// subdomain wildcard. chrome.cookies gates read access on the COOKIE's own
+// domain scope, not on the url passed to getAll(): the tenant's
+// XSRF-TOKEN-<guid> is scoped to the parent domain `.cyberark.cloud`, so
+// Chrome checks permission against `https://cyberark.cloud/` and a grant of
+// the exact pcloud origin alone leaves the cookie unreadable. This pattern
+// grants nothing on any tenant subdomain.
+var APEX_ORIGIN_PATTERN = "https://cyberark.cloud/*";
 
 // Synchronous by construction: it runs before request() while the user
 // activation carried across the sendMessage hop is still live.
 function isAllowedOriginPattern(pattern) {
   if (typeof pattern !== "string") return false;
-  return pattern === S3_ORIGIN_PATTERN || PCLOUD_ORIGIN_PATTERN_RE.test(pattern);
+  return (
+    pattern === S3_ORIGIN_PATTERN ||
+    pattern === APEX_ORIGIN_PATTERN ||
+    PCLOUD_ORIGIN_PATTERN_RE.test(pattern)
+  );
 }
 
 async function handleImport(msg) {
@@ -98,16 +110,37 @@ async function handleImport(msg) {
   var xsrf = findXsrfCookie(cookies, pcloudHost);
 
   if (!xsrf) {
-    // Names only, and only XSRF-shaped ones: this shows what was rejected
-    // without printing unrelated cookie names (e.g. SSO tokens). Never log a
-    // cookie VALUE.
-    var names = xsrfCandidateNames(cookies).join(", ");
+    // Names and domains only, and only XSRF-shaped NAMES: this shows what was
+    // rejected without printing unrelated cookie names (e.g. SSO tokens).
+    // Never log a cookie VALUE. The cookie count and the distinct domains are
+    // what distinguish the two failures that look identical from the outside:
+    // "the cookie is not readable at this permission scope" (0 cookies, or
+    // only host-scoped ones) vs "it is readable but no candidate matched".
+    // Terse on purpose — this string is surfaced in the button label, which
+    // truncates at 120 chars; the full target origin goes to the console only.
+    var names = xsrfCandidateNames(cookies).join(", ") || "none";
+    var domains = cookieDomains(cookies).join(", ") || "none";
     var noTokenMsg =
-      "no usable XSRF-TOKEN cookie for " + origins.pcloudOrigin +
-      " (XSRF-shaped candidates: " + (names || "none") + ")";
-    console.log("[import-to-tenant]", noTokenMsg);
+      "no usable XSRF-TOKEN cookie: " + cookies.length +
+      " cookies, domains " + domains +
+      ", XSRF-shaped: " + names;
+    console.log("[import-to-tenant] %s (target %s)", noTokenMsg, origins.pcloudOrigin);
     return { ok: false, status: 0, body: noTokenMsg, error: noTokenMsg };
   }
+
+  // Console only, never surfaced in the UI, and NEVER the value: records the
+  // real-world scope of the token cookie so the permission model above stays
+  // grounded in observation rather than inference. Matched on name+value so
+  // the domain reported is the scope of the cookie actually selected, even if
+  // the same name exists at two scopes.
+  var selected = cookies.filter(function (c) {
+    return c.name === xsrf.name && c.value === xsrf.value;
+  })[0];
+  console.log(
+    "[import-to-tenant] csrf cookie selected: name=%s domain=%s",
+    xsrf.name,
+    (selected && selected.domain) || "(unknown)"
+  );
 
   // The exact header name is NOT confirmed. Both conventional forms are sent:
   // an extra unrecognised header is harmless, a missing one fails the request.

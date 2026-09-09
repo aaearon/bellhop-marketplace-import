@@ -39,6 +39,26 @@ export function xsrfCandidateNames(cookies: Cookie[]): string[] {
 }
 
 /**
+ * Returns the distinct `domain` values present in a cookie list, in
+ * first-seen order. Cookies with no domain are skipped.
+ *
+ * Diagnostics only, and deliberately domain-only: the scope a cookie is set
+ * at is what determines whether `chrome.cookies` can read it at all (Chrome
+ * gates on the cookie's own domain scope, not the requested url), so this is
+ * the one field worth surfacing on a failure. It exposes no cookie name and
+ * no cookie value.
+ */
+export function cookieDomains(cookies: Cookie[]): string[] {
+  const seen: string[] = [];
+  for (const cookie of cookies) {
+    const domain = cookie.domain;
+    if (!domain) continue;
+    if (!seen.includes(domain)) seen.push(domain);
+  }
+  return seen;
+}
+
+/**
  * Selects the CSRF cookie matching `XSRF-TOKEN-<guid>` from a cookie list.
  *
  * Case sensitivity (design decision, for review): the `XSRF-TOKEN-` prefix
