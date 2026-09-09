@@ -14,7 +14,13 @@ A content script in the marketplace iframe fetches the product's presigned S3 do
 
 ## Screenshots
 
-<!-- Screenshots land in docs/images/ once captured. Reference them here by filename when they exist — do not add image links before then. -->
+The button is injected next to the vendor's own Download button, cloned from it so it inherits the portal's styling:
+
+![The Import into Privilege Cloud button beside the vendor's Download button](docs/images/injected-button.png)
+
+Clicking it names the product, the package kind and the destination tenant before anything is written. The tenant shown here is a placeholder:
+
+![The Bellhop confirmation dialog, naming the product, kind and destination tenant](docs/images/confirmation-dialog.png)
 
 ## Build and load
 
