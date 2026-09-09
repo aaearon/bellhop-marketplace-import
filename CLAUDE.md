@@ -83,13 +83,36 @@ Relative to the marketplace iframe origin:
   origin is not stable and is never hardcoded — see Artifact origin, which also
   covers why this endpoint is called at dialog-open.
   `sha256` was empty on the payloads this was built against, but was
-  **observed populated** (a real 64-hex digest) on 2026-09-09. Treat it as
+  **observed populated** (a real 64-hex digest) on 2026-09-09, including on the
+  WinSCP connection component checked live that day. Treat it as
   sometimes-present: an integrity check against the fetched bytes before the
   import POST now looks possible and is worth building, but it must degrade to
   importing without verification when the field is absent, or it will fail
   closed on products that still return `""`. Nothing verifies it today.
   `fileName` is still empty in practice. Do not invent a digest that the
   endpoint did not supply.
+
+**No endpoint reports the artifact's size, and there is no permission-free way
+to obtain it.** Checked live against `cyberiam-poc` on 2026-09-09, for the
+WinSCP connection component (a 9,725,456-byte artifact): `/api/integrations/<uuid>`
+(24 fields), `/versions` and `/api/downloads/integrations/<uuid>` all carry no
+size, byte-count or content-length field. The obvious fallback also fails:
+`Content-Length` is a CORS-safelisted response header and `fetch` exposes
+headers before the body, so a size probe that aborts after a few bytes would
+work — but the artifact bucket sends no `Access-Control-Allow-Origin`. Verified
+by test, not assumed: a `cors`-mode fetch to the presigned url fails while a
+`no-cors` fetch returns an opaque response, so the request reaches S3 and the
+page's CSP is not the blocker. A content script's isolated world bypasses page
+CSP but not CORS, so it cannot read that header either.
+
+The consequence is that **the confirmation dialog cannot warn about size.** The
+only way to learn the size is the service worker's fetch, which needs the S3
+host permission, which is not held at dialog-open and cannot be requested there
+— the origin is unknown until the download url resolves, and that `await`
+destroys the transient user activation the prompt needs (see Sequencing). A
+static "large packages may be rejected" line would sidestep this but assert a
+threshold that is not known and fire on every small import. Deliberately not
+built; the failure is reported after the fact instead (see Known limitations).
 
 ## Classification
 
