@@ -302,6 +302,74 @@ button shows its own loading state (disabled, small inline CSS spinner,
 returns — on every path, including a failed pre-dialog fetch or a thrown
 error.
 
+## Injection anchor
+
+The Import button is inserted `afterend` of the vendor's Download button, so
+finding that button reliably is load-bearing: miss it and the extension
+silently offers nothing. `findAnchorButton` in `extension/content.js` tries
+four strategies in order, most durable first, and logs which one matched (or
+that none did) so a future break is diagnosable from the console rather than
+by bisecting.
+
+Observed live against `acme-poc`, product-info page for a
+connection-component product (Oracle SQL Developer for VS Code), by
+temporarily instrumenting the content script itself to dump the Download
+button and its ancestors to the console — the outer browser-automation
+tooling used to drive this investigation could not see into the marketplace
+iframe at all (see below). The portal is React/PrimeReact under the hood
+(`p-button`, `p-component`, `data-pc-*`), **not** Angular — there is no
+`_ngcontent-*` anywhere in the observed markup, contrary to an earlier
+assumption. Observed markup:
+
+```html
+<div class="item-header__row">
+  <div class="item-header__identity">…logo, title, "By: Idira"…</div>
+  <button aria-label="Download" class="p-button p-component p-button-lg"
+          type="button" data-testid="item-download"
+          data-pc-name="button" data-pc-section="root">
+    <span class="p-button-icon p-c p-button-icon-left cyb-icon-size-sm cyb-icon-download-04"
+          data-pc-section="icon"></span>
+    <span class="p-button-label p-c" data-pc-section="label">Download</span>
+  </button>
+</div>
+```
+
+1. **`[data-testid="item-download"]`** — OBSERVED. The most durable signal
+   found: a vendor test id, generally stable across localisation/copy
+   changes (though not immune to a vendor refactor).
+2. **Icon class `cyb-icon-download-*`** — OBSERVED (`cyb-icon-download-04`
+   exactly; the wildcard suffix match is a hedge, not confirmed). Part of the
+   portal's own icon-font convention; language-independent.
+3. **Structural: last non-own `button`/`a` inside `.item-header__row`** —
+   OBSERVED on this one product only. `item-header__row` is an authored,
+   semantic class (not a build hash) holding the identity block and the
+   Download button as siblings; GUESS that the same structure holds for
+   platform-kind products, which were not checked live.
+4. **Text match, last resort** — case-insensitive match of trimmed
+   `textContent` or `aria-label` against `"download"`. The only strategy
+   that breaks under localisation or a vendor copy change; kept only as a
+   safety net, not enumerated per-language.
+
+Every strategy excludes the extension's own injected button
+(`id="import-to-tenant-btn"` / `data-import-to-tenant-btn`) so a later
+MutationObserver pass can't re-anchor onto it. If no strategy matches,
+nothing is injected and the console says so clearly (fail closed — see
+Known limitations for the residual risk).
+
+**Tooling note:** the `read_page`/`find` browser-automation tools could not
+reach into the product page's DOM at all in this session — it sits inside a
+doubly-nested cross-origin iframe
+(`<t>.cyberark.cloud` → `<t>-managespace.cyberark.cloud` →
+`<t>-marketplace.cyberark.cloud`) and those tools returned only the shell's
+own accessibility tree no matter the wait time, tab, or query. Console log
+capture (`read_console_messages`) does reach across that boundary, since
+`chrome.runtime` messages from the content script's own isolated-world
+execution surface there regardless of frame origin. The DOM dump above was
+obtained by temporarily adding diagnostic `console.log` calls to
+`extension/content.js` itself (reloading the unpacked extension to pick them
+up) rather than by external inspection — that diagnostic code has been
+removed from the shipped file.
+
 ## Auth
 
 The service worker's `fetch` with `credentials: 'include'` carries the tenant
@@ -380,10 +448,12 @@ time and re-testing.
 - Re-import behaviour for platforms is untested.
 - A 200 from the import endpoint has not been confirmed to mean the
   component actually functions afterward — only that the POST succeeded.
-- The injection anchor (`findDownloadButton` in `extension/content.js`) keys
-  off the Download button's visible text, not a stable selector, because
-  Angular's `_ngcontent-*` attributes are build-hash dependent. A vendor
-  frontend redeploy can break this silently.
+- The injection anchor (`findAnchorButton` in `extension/content.js`) tries
+  several strategies before falling back to a text match — see "Injection
+  anchor" below. The remaining risk is a vendor rename of the `item-download`
+  test id and the `cyb-icon-download-*` glyph class in the same redeploy,
+  which would drop through to the text-match fallback (English-only, still
+  breakable by localisation).
 - The optional-permission flow has been exercised against a live tenant up to
   the grant: the confirmation dialog, the gesture-driven native prompt and the
   grant all worked. The import then failed on the parent-domain cookie scope

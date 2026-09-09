@@ -7,7 +7,6 @@ What stands between this spike and a public Chrome Web Store release, grouped by
 - [ ] **Trademark and vendor sanction.** The extension is named "Idira Marketplace Importer" and automates the vendor's admin UI without vendor sanction. Risk: this is a legal question, not an engineering one — trademark use for an unsanctioned integration can get the listing pulled or draw a cease-and-desist. Strategic risk alongside it: if the vendor ships a native "Install" action, this extension becomes redundant.
 - [ ] **SRS tenants never tested.** The code routes `CPM|SRS → /Platforms/Import` and thereby claims SRS support, but only a CPM platform path has ever been exercised. Risk: shipping a claimed capability that may fail against real SRS data.
 - [ ] **Non-super-admin users never tested.** Every verification run so far used maximum rights. Risk: the extension may fail, partially fail, or behave unpredictably for the majority of real users who are not super admins — untested against a PAM product's permission model.
-- [ ] **Button injection anchors on literal text "Download".** `findDownloadButton` in `extension/content.js` keys off the button's visible text, not a stable selector. Risk: any localisation or vendor copy change silently removes the Import button with no error, no warning, no telemetry.
 - [ ] **Missing Chrome Web Store privacy policy and permission justifications.** The store requires a privacy policy and a written justification per requested permission. `cookies`, requested against a privileged-access-management domain, will draw particular reviewer scrutiny. Risk: submission rejected or delayed at review.
 
 ## Should fix
@@ -30,6 +29,7 @@ What stands between this spike and a public Chrome Web Store release, grouped by
 
 ## Verified working
 
+- Injection anchors on `data-testid="item-download"`, falling back to the `cyb-icon-download-*` icon class, then a structural anchor, then text. Residual risk: a vendor redeploy renaming both the test id and the icon class drops it to the fragile text match.
 - Artifact origin is derived from the download URL at runtime and requested per-host; no vendor-internal bucket name is baked into the manifest.
 - End-to-end import of a PSM connection component on a CPM tenant as super admin, including the confirmation dialog, per-tenant optional permission grant, and CSRF handling.
 - Duplicate import is refused, not silently overwritten: `HTTP 409`, `ErrorCode CAWS00001E`. The existing failure path surfaces it, so no pre-flight check is required.

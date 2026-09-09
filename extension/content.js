@@ -173,14 +173,123 @@
   }
 
   // --- DOM: find/inject button --------------------------------------------
-  function findDownloadButton() {
+  //
+  // Anchor strategies, tried in order of durability (most durable first),
+  // each falling through to the next on failure. Strategies 1-3 were
+  // confirmed against a live product-info page (Oracle SQL Developer for VS
+  // Code, acme-poc tenant, connection-component kind, 2026-09-09) by
+  // dumping the Download button and its ancestors from inside the content
+  // script itself (see CLAUDE.md "Injection anchor" for the full observed
+  // markup and which parts are guesses vs. observed).
+  //
+  // Every strategy excludes the extension's own injected button, since it is
+  // inserted as a sibling right after the anchor and would otherwise be
+  // re-matched by a later MutationObserver pass.
+  function isOwnButton(el) {
+    return !!el && (el.id === BTN_ID || el.hasAttribute("data-import-to-tenant-btn"));
+  }
+
+  // Strategy 1 — OBSERVED. The vendor renders the Download button with
+  // data-testid="item-download". Test ids exist for the vendor's own
+  // automated UI tests and are generally stable across localisation/copy
+  // changes; they are not immune to a vendor refactor, but that is a much
+  // rarer event than a copy or language change.
+  function findByTestId() {
+    var el = document.querySelector('[data-testid="item-download"]');
+    return el && !isOwnButton(el) ? el : null;
+  }
+
+  // Strategy 2 — OBSERVED. The Download button's icon is
+  // <span class="... cyb-icon-size-sm cyb-icon-download-04">, part of the
+  // portal's own "cyb-icon-*" glyph font. The glyph name ("download") is a
+  // language-independent signal. Matches any "cyb-icon-download" prefixed
+  // class rather than the exact "-04" suffix, in case that numeral is a
+  // style/version variant rather than part of the glyph name — GUESS: only
+  // the "-04" suffix was actually observed, the prefix match is a hedge.
+  var ICON_CLASS_RE = /\bcyb-icon-download\b|\bcyb-icon-download-\d+\b/;
+  function findByIconClass() {
+    var icons = document.querySelectorAll('[class*="cyb-icon-download"]');
+    for (var i = 0; i < icons.length; i++) {
+      if (!ICON_CLASS_RE.test(icons[i].className)) continue;
+      var btn = icons[i].closest("button, a");
+      if (btn && !isOwnButton(btn)) return btn;
+    }
+    return null;
+  }
+
+  // Strategy 3 — OBSERVED, but on a single product only (GUESS that the same
+  // structure holds for platform-kind products, which were not checked live
+  // — see Classification in CLAUDE.md). The Download button's parent is
+  // <div class="item-header__row">, alongside the product identity block
+  // (logo/title/author) — an authored, semantic class name, not a build-hash
+  // attribute (this portal is React/PrimeReact under the hood, judging by
+  // the p-button/p-component classes and data-pc-* attributes; there is no
+  // Angular _ngcontent-* anywhere in the observed markup). Falls back to the
+  // last non-own button in that row, on the theory that Download is the
+  // rightmost vendor action there and Import is always inserted after it.
+  function findByHeaderRow() {
+    var row = document.querySelector(".item-header__row");
+    if (!row) return null;
+    var buttons = row.querySelectorAll("button, a");
+    for (var i = buttons.length - 1; i >= 0; i--) {
+      if (!isOwnButton(buttons[i])) return buttons[i];
+    }
+    return null;
+  }
+
+  // Strategy 4 — LAST RESORT, kept only as a safety net. Case-insensitive
+  // visible-text / aria-label match against a small set of known English
+  // labels. This is the ONLY strategy that breaks under localisation or a
+  // vendor copy change — exactly the bug the strategies above exist to route
+  // around.
+  var TEXT_LABELS = ["download"];
+  function findByText() {
     var candidates = document.querySelectorAll("button, a");
     for (var i = 0; i < candidates.length; i++) {
       var el = candidates[i];
-      var text = (el.textContent || "").trim();
-      if (text === "Download" || text.indexOf("Download") === 0) {
+      if (isOwnButton(el)) continue;
+      var text = (el.textContent || "").trim().toLowerCase();
+      var aria = (el.getAttribute("aria-label") || "").trim().toLowerCase();
+      for (var j = 0; j < TEXT_LABELS.length; j++) {
+        var label = TEXT_LABELS[j];
+        if (text === label || text.indexOf(label) === 0 || aria === label) {
+          return el;
+        }
+      }
+    }
+    return null;
+  }
+
+  var ANCHOR_STRATEGIES = [
+    ["data-testid=item-download", findByTestId],
+    ["icon class cyb-icon-download*", findByIconClass],
+    ["header row structure (.item-header__row)", findByHeaderRow],
+    ["text match (last resort)", findByText],
+  ];
+
+  // Logged once per outcome (not every call) so a broken-anchor page doesn't
+  // spam the console on every MutationObserver-triggered retry, while still
+  // making a future break diagnosable from the console alone.
+  var loggedAnchorStrategy = false;
+  var loggedAnchorMissing = false;
+
+  function findAnchorButton() {
+    for (var i = 0; i < ANCHOR_STRATEGIES.length; i++) {
+      var name = ANCHOR_STRATEGIES[i][0];
+      var el = ANCHOR_STRATEGIES[i][1]();
+      if (el) {
+        if (!loggedAnchorStrategy) {
+          loggedAnchorStrategy = true;
+          console.log("[import-to-tenant] anchor button found via strategy: %s", name);
+        }
         return el;
       }
+    }
+    if (!loggedAnchorMissing) {
+      loggedAnchorMissing = true;
+      console.log(
+        "[import-to-tenant] no anchor strategy matched the Download button; not injecting (fail closed)."
+      );
     }
     return null;
   }
@@ -698,9 +807,9 @@
       return;
     }
 
-    var downloadBtn = findDownloadButton();
+    var downloadBtn = findAnchorButton();
     if (!downloadBtn) {
-      return; // Download button not on screen right now; nothing to anchor to.
+      return; // Anchor button not on screen right now (or no strategy matched); nothing to anchor to.
     }
 
     var classification = await checkProductKind(uuid);
@@ -710,7 +819,7 @@
     // changed, or the confirmation dialog was opened in the meantime.
     if (dialogOpen) return;
     if (buttonPresent()) return;
-    downloadBtn = findDownloadButton();
+    downloadBtn = findAnchorButton();
     if (!downloadBtn) return;
 
     var importBtn = makeImportButton(downloadBtn, uuid, classification);
