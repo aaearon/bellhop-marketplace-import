@@ -1,0 +1,95 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.12.0"
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      # Full suite runs before anything is published — a release that ships
+      # a failing build is worse than no release.
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      # Third source of truth: the git tag must agree with both
+      # extension/manifest.json and package.json, or the release is a
+      # mislabelled artifact. github.ref_name for a tag push is the bare tag
+      # (e.g. "v0.2.0"), which tools/check-tag.mjs normalizes itself.
+      - name: Check tag/version agreement
+        run: npm run check:tag -- "${{ github.ref_name }}"
+
+      - name: Package
+        run: npm run package
+
+      - name: Determine prerelease flag
+        id: prerelease
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          major="${version%%.*}"
+          flag=false
+          if [ "$major" -lt 1 ]; then
+            flag=true
+          fi
+          case "$GITHUB_REF_NAME" in
+            *-*) flag=true ;;
+          esac
+          echo "flag=$flag" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ github.ref_name }}
+          PRERELEASE: ${{ steps.prerelease.outputs.flag }}
+        run: |
+          version_num="${VERSION#v}"
+          zip_path="dist/bellhop-${version_num}.zip"
+          if [ ! -f "$zip_path" ]; then
+            echo "::error::expected package at $zip_path, not found" >&2
+            exit 1
+          fi
+
+          prerelease_flag=""
+          if [ "$PRERELEASE" = "true" ]; then
+            prerelease_flag="--prerelease"
+          fi
+
+          notes="Bellhop $VERSION
+
+          This zip is **not** directly installable by dragging it into Chrome
+          or Edge — neither browser accepts a drag-and-drop zip install. It is:
+
+          - a store-upload artifact (Chrome Web Store / Edge Add-ons), or
+          - an extract-then-\"Load unpacked\" artifact for local/manual use.
+
+          See the [README](https://github.com/${GITHUB_REPOSITORY}/blob/${VERSION}/README.md) for install steps.
+
+          Deliberately no signed \`.crx\` here: the enterprise force-install
+          path needs one, but it also needs a private signing key and a
+          pinned extension ID, neither of which this repo commits to yet."
+
+          gh release create "$VERSION" \
+            "$zip_path" \
+            --title "Bellhop $VERSION" \
+            --notes "$notes" \
+            $prerelease_flag

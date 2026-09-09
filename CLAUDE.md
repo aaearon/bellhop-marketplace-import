@@ -682,6 +682,13 @@ from inline SVG source via ImageMagick `convert` + Pillow; run
   into `dist/` for store submission; `npm run check:version` verifies
   `extension/manifest.json` and `package.json` report the same version
   before packaging. Neither script's output (`dist/`) is committed.
+- Releases: pushing a `v*` tag runs `.github/workflows/release.yml`, which
+  additionally requires the tag to agree with `manifest.json`/`package.json`
+  (`npm run check:tag`, backed by `checkTagVersionSync` in `src/version.ts`)
+  before publishing a GitHub Release with `dist/bellhop-<version>.zip`
+  attached. Zip only — no CRX signing, no manifest `key`. The release is
+  zip-only and store-upload/load-unpacked only; it is not drag-and-drop
+  installable.
 - `docs/` is published as a public GitHub Pages site (project site, built
   from the `docs/` folder by GitHub's built-in Jekyll, no workflow file) —
   this is how `docs/PRIVACY.md` satisfies the Chrome Web Store's and Edge
