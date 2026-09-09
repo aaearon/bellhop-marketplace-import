@@ -20,10 +20,13 @@
 ## What this extension does
 
 Idira Integration Importer adds an "Import to tenant" button to a product page on the Idira
-marketplace. When clicked, it shows a confirmation dialog naming the destination tenant, then
-downloads the selected integration artifact and uploads it directly into that same tenant's
-Privilege Cloud, using the import API. It replaces the manual step of downloading the artifact
-and uploading it by hand. The extension does nothing until the user clicks this button.
+marketplace. Marketplace and Privilege Cloud are both services of the one Idira Identity Security
+Platform tenant you are signed into, not separate products — the extension moves an artifact
+between two services of a platform you already use. When clicked, it shows a confirmation dialog
+naming the destination tenant, then downloads the selected integration artifact and uploads it
+directly into that same tenant's Privilege Cloud, using the import API. It replaces the manual
+step of downloading the artifact and uploading it by hand. The extension does nothing until the
+user clicks this button.
 
 ## What data it accesses, and why
 
@@ -44,7 +47,8 @@ and uploading it by hand. The extension does nothing until the user clicks this 
 ## What it transmits, and to whom
 
 The extension sends data to exactly two kinds of destination, both of which are places you
-already have a relationship with:
+already have a relationship with — both are services of the one platform tenant you are signed
+into, not a hand-off to a second vendor:
 
 1. **Your own tenant** — the artifact file (base64-encoded, unmodified) and the CSRF token
    described above, sent to `https://<your-tenant>-pcloud.cyberark.cloud`, i.e. your own

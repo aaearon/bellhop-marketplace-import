@@ -11,8 +11,13 @@ below). Confirmed working end-to-end against a live tenant
 (`acme-poc`), for a single connection-component product, as a super
 admin.
 
-"Idira" is Palo Alto Networks' rebrand of CyberArk. Product docs live at
-docs.cyberark.com. The public marketplace is marketplace.idira.pan.dev.
+"Idira" is Palo Alto Networks' rebrand of CyberArk — the vendor product is
+the Idira Identity Security Platform (formerly the CyberArk Identity
+Security Platform). Marketplace and Privilege Cloud are services of that one
+platform, not separate products; a customer has a single platform tenant,
+and its services live on sibling subdomains of that tenant (see Tenant URL
+structure below). Product docs live at docs.cyberark.com. The public
+marketplace is marketplace.idira.pan.dev.
 
 ## Tenant URL structure
 
@@ -30,6 +35,14 @@ All same-site (`cyberark.cloud`), all cross-origin. The marketplace SPA
 refuses to render as a top-level page ("You're missing the right
 permissions") — it must be framed by the shell, so it cannot be developed or
 tested standalone.
+
+These are not two vendors' products stitched together — they are sibling
+subdomains of one platform tenant, one per service (shell, Marketplace,
+Privilege Cloud). One SSO session and cookie namespace spans all of them.
+That is why this extension can move an artifact from Marketplace to
+Privilege Cloud using a session the user already holds, and why the CSRF
+token cookie is scoped to the `.cyberark.cloud` parent domain rather than to
+any single service host (see Auth).
 
 ## Architecture
 
@@ -138,8 +151,8 @@ What is actually **requested**, and therefore ever granted, is the narrow
 three-origin set below. Neither wildcard is ever requested, and the service
 worker refuses to request either.
 
-This matters because the extension sits next to a PAM product.
-`*.cyberark.cloud` + `cookies` as a standing install-time grant means read
+This matters because the extension talks to services of a security platform
+tenant. `*.cyberark.cloud` + `cookies` as a standing install-time grant means read
 access to the session cookie of every customer tenant a partner is signed in
 to, forever. Optional permissions make that grant per-tenant, explicit, and
 revocable.
@@ -376,16 +389,17 @@ The service worker's `fetch` with `credentials: 'include'` carries the tenant
 session cookie once the tenant's host permission has been granted (see
 Permissions) — Chrome treats extension-initiated requests as same-site when
 the extension holds a host permission for the target. This alone gets the
-session cookie accepted by the PAM API: the first import attempt without a
+session cookie accepted by the Privilege Cloud API: the first import attempt without a
 CSRF header returned `HTTP 400 - CSRF validation failed`, not a 401/403,
 confirming the cookie was accepted and only the double-submit CSRF token was
 missing.
 
 CSRF is required, and `src/csrf.ts` is wired into `extension/background.js`.
 
-**The token cookie is parent-domain scoped.** `XSRF-TOKEN-<guid>` is an SSO
-cookie set on `.cyberark.cloud` and shared across the shell, marketplace and
-pcloud hosts — not a host-only cookie on `<t>-pcloud.cyberark.cloud`.
+**The token cookie is parent-domain scoped.** Shell, marketplace and pcloud
+are services of one platform tenant sharing a single SSO session, so
+`XSRF-TOKEN-<guid>` is set on the shared `.cyberark.cloud` parent domain —
+not a host-only cookie on `<t>-pcloud.cyberark.cloud`.
 `chrome.cookies` gates read access on the **cookie's own domain scope**, not
 on the url passed to `getAll()`: for a `.cyberark.cloud` cookie Chrome checks
 the extension's permission against `https://cyberark.cloud/`, which a grant of
@@ -408,8 +422,9 @@ one, and a token scoped to an unrelated tenant is excluded outright. Without
 it only the fail-closed-on-multiple-candidates path runs, which is wrong for a
 partner signed in to several tenants at once. Ambiguity still fails closed.
 
-Cookie diagnostics report **names and domains only, never values** — this sits
-next to a PAM product, so a cookie value must never reach a log or the UI. The
+Cookie diagnostics report **names and domains only, never values** — this
+extension operates inside a live platform tenant's session, so a cookie
+value must never reach a log or the UI. The
 "no usable XSRF-TOKEN cookie" failure reports the cookie count `getAll`
 returned, the distinct cookie domains seen (`cookieDomains`, `src/csrf.ts`)
 and the XSRF-shaped candidate names (`xsrfCandidateNames` — candidate names
@@ -473,9 +488,10 @@ time and re-testing.
 
 ## Future direction
 
-The Idira Marketplace carries integrations for all Idira products, not just
-Privilege Cloud, so this extension may later target other Idira services.
-The design already accommodates that additively: `classifyProduct`/
+The Idira Marketplace carries integrations for all of the platform's
+services, not just Privilege Cloud, so this extension may later target
+other services of the platform. The design already accommodates that
+additively: `classifyProduct`/
 `importPathFor` (`src/classify.ts`) map an `idiraServices` marker to a
 destination, and `deriveOrigins` already derives per-service hosts from the
 tenant name, so adding a service would mean a new mapping plus a host, not a

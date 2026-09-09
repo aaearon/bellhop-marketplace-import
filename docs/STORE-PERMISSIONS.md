@@ -30,11 +30,11 @@ POST. This is required — the tenant's Privilege Cloud import API rejects reque
 failed`, not an auth error, i.e. the session cookie itself was already accepted).
 
 **Why there is no lesser alternative:** `chrome.cookies` is the only extension API that can read
-a cookie value at all. The alternative — injecting a script into the tenant's own vault UI to read
-the token from the page instead — was considered and rejected: it would require a host permission
-on a live PAM (privileged access management) product's UI and running code inside it, a larger and
-riskier surface than reading one named cookie. There is no scope narrower than `cookies` in the
-Chrome permissions model.
+a cookie value at all. The alternative — injecting a script into the tenant's own Privilege Cloud UI
+to read the token from the page instead — was considered and rejected: it would require a host
+permission on a live Privilege Cloud UI and running code inside it, a larger and riskier surface
+than reading one named cookie. There is no scope narrower than `cookies` in the Chrome permissions
+model.
 
 **What it is not used for:** No cookie other than the one CSRF token is ever read. Diagnostic
 logging (used only on failure, to distinguish "cookie unreadable at this permission scope" from
@@ -144,10 +144,21 @@ single stated purpose.
 
 ## Note for the reviewer
 
-This extension operates alongside a privileged-access-management (PAM) product
-(CyberArk/Idira Privilege Cloud) and was built with that sensitivity in mind:
+This extension does not bridge two vendors' products, and it does not cross a trust boundary. The
+vendor product is the single Idira Identity Security Platform (formerly the CyberArk Identity
+Security Platform); Marketplace and Privilege Cloud are services of that one platform, not
+separate products. A customer has one platform tenant, and its services live on sibling
+subdomains of that tenant (the shell at `<tenant>.cyberark.cloud`, the marketplace SPA at
+`<tenant>-marketplace.cyberark.cloud`, Privilege Cloud's vault at `<tenant>-pcloud.cyberark.cloud`),
+sharing one SSO session and cookie namespace. The extension moves an artifact between two services
+of a platform the user already owns, using a session the user already holds, inside a perimeter
+the user already trusts — it never talks to any host outside that one tenant's own services. This
+single-platform, single-session structure is exactly why per-tenant optional host permissions are
+sufficient and why no standing access is needed, and it was built with that in mind:
 
-- **Permissions are optional and per-tenant, not standing.** The extension installs with no host
+- **Permissions are optional and per-tenant, not standing.** The extension's whole reach is scoped
+  to services of the one tenant the user is currently signed into — never a standing grant across
+  tenants, and never access to any other vendor's product. The extension installs with no host
   access and no cookie reach at all (`optional_host_permissions`, not `host_permissions`, in
   `extension/manifest.json`). Each tenant must be individually approved via a native Chrome
   permission prompt before the extension can act on it, and each grant is independently visible
