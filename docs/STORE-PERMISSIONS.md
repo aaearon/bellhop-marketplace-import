@@ -1,13 +1,14 @@
 # Chrome Web Store Submission — Bellhop
 
-> **Applies only if pursuing a Chrome Web Store submission** (listed or unlisted). If distribution
-> goes the GitHub/self-hosted route instead, this document can be ignored entirely — see
-> "Distribution method undecided" in `RELEASE-BLOCKERS.md`.
+> Distribution is confirmed for both the Chrome Web Store and Microsoft Edge Add-ons. This
+> document is written for the Chrome Web Store Developer Dashboard's fields, but the same
+> per-permission justifications answer Edge's equivalent certification questions (Edge developer
+> policy §1.5 Personal information, §1.6 Permissions) — paste from here into Edge's Partner Center
+> notes as well.
 
 Draft text for the Web Store Developer Dashboard's "Privacy practices" and "Permissions
 justification" fields. Each section below maps to one form field. Verified against
-`extension/manifest.json`, `extension/content.js`, `extension/background.js`, `src/*.ts` on
-`feat/bellhop-spike`.
+`extension/manifest.json`, `extension/content.js`, `extension/background.js`, `src/*.ts`.
 
 ---
 
@@ -39,13 +40,21 @@ permission on a live Privilege Cloud UI and running code inside it, a larger and
 than reading one named cookie. There is no scope narrower than `cookies` in the Chrome permissions
 model.
 
-**What it is not used for:** No cookie other than the one CSRF token is ever read. Diagnostic
+**What it is not used for:** No cookie *value* other than the one CSRF token's is ever read or
+used. `chrome.cookies.getAll()` has no name filter, so it necessarily returns every cookie visible
+at the granted origin's scope, not only the XSRF one — those other cookies do pass through
+extension memory during that one call. The code inspects only their *names*, filtering for the
+`XSRF-TOKEN-<guid>` pattern, and only the matched cookie's *value* is ever used or transmitted
+further; every other cookie in that result is discarded immediately and never used. Diagnostic
 logging (used only on failure, to distinguish "cookie unreadable at this permission scope" from
-"cookie readable but no candidate matched") reports cookie *names* and *domains* only — never
-values, and never for cookies outside the `XSRF-TOKEN` shape (`src/csrf.ts`,
-`extension/background.js`). No cookie is ever written, and — because `chrome.cookies` access is
-itself gated by the host permission described below — the extension has no cookie reach at all
-until a specific tenant has been granted.
+"cookie readable but no candidate matched") reports, precisely: the *domains* of every cookie
+returned by that call (`cookieDomains`, unfiltered by name — this can include the domain, but
+never the name or value, of an unrelated cookie such as a session cookie present at the same
+scope), and the *names* of only the candidates shaped like `XSRF-TOKEN-<guid>`
+(`xsrfCandidateNames`). No cookie value is ever logged, anywhere, for any cookie
+(`src/csrf.ts`, `extension/background.js`). No cookie is ever written, and — because
+`chrome.cookies` access is itself gated by the host permission described below — the extension
+has no cookie reach at all until a specific tenant has been granted.
 
 ### Host permissions
 
@@ -89,22 +98,32 @@ has no access granted to tenant B; each tenant requires its own explicit approva
 native Chrome permission prompt naming the exact origin. Nothing is granted silently, and nothing
 is granted for a tenant the user has not clicked Import against.
 
-### `content_scripts` — `all_frames: true`
+### `content_scripts` — match pattern `https://*.cyberark.cloud/*` and `all_frames: true`
 
-**What it enables:** Running the content script inside every frame on a matched
-`*.cyberark.cloud` page, not just the top-level document.
+**What it enables:** Running the content script — unconditionally, at install time, no permission
+prompt — on every page under `*.cyberark.cloud`, in every frame on that page, not just the
+top-level document.
 
-**Why there is no lesser alternative:** The Idira marketplace product page the button is injected
-into is not the top-level document — the tenant UI is a shell page that loads the marketplace as
-a nested, cross-origin iframe (and that iframe itself refuses to render as a top-level page). Only
-`all_frames: true` reaches it. This setting does not grant any additional host access on its own —
-a content script match is not a host permission, and the same-origin fetches it performs
-(`/api/integrations/...`, `/api/downloads/integrations/...`) run using the page's own existing
-session, needing no permission grant of any kind.
+**Why the match pattern is the whole apex, not just the marketplace subdomain:** Chrome match
+patterns cannot express a partial subdomain wildcard — `https://*-marketplace.cyberark.cloud/*` is
+rejected outright as an invalid host wildcard. `https://*.cyberark.cloud/*` is the narrowest
+pattern Chrome's manifest syntax allows that still covers the marketplace subdomain, whatever a
+given tenant's name is. The script narrows itself in code, in its own first line: it checks
+`location.hostname` against a regex for the `<tenant>-marketplace.cyberark.cloud` shape and
+returns immediately, doing nothing at all, everywhere else — including the shell, the PasswordVault
+UI, and any other `*.cyberark.cloud` subdomain. A content script match is not a host permission by
+itself and grants no `chrome.cookies` or cross-origin `fetch` access; the same-origin fetches this
+script performs (`/api/integrations/...`, `/api/downloads/integrations/...`) run only on the one
+frame that passes that check, using the page's own existing session.
 
-**What it is not used for:** The content script filters to the marketplace subdomain by hostname
-regex on its first line and does nothing in any other frame it happens to run in — it does not
-read or act on content in unrelated frames or pages.
+**Why there is no lesser alternative for `all_frames`:** The Idira marketplace product page the
+button is injected into is not the top-level document — the tenant UI is a shell page that loads
+the marketplace as a nested, cross-origin iframe (and that iframe itself refuses to render as a
+top-level page). Only `all_frames: true` reaches it.
+
+**What it is not used for:** Outside the one marketplace frame that passes the hostname check, the
+script is present in memory but never runs any of its logic — it does not read or act on content
+in the shell, PasswordVault, or any other frame or page it happens to load into.
 
 ---
 
@@ -128,7 +147,7 @@ and forwarded as opaque data, never parsed or executed.
 | Personally identifiable information | No | — |
 | Health information | No | — |
 | Financial and payment information | No | — |
-| Authentication information | **Read, not collected** | The extension reads one CSRF cookie value and echoes it, in-request, as a header on a request to the same tenant it came from. The value is never transmitted to any other destination, never written to storage or disk, never logged (logs record only the cookie's name and domain), and never retained after the request completes. It is not "collected" in the sense of being gathered, stored, or reused — it is read once per import and used once, immediately, for the single request that needs it. |
+| Authentication information | **Read, not collected** | The extension reads one CSRF cookie value and echoes it, in-request, as a header on a request to the same tenant it came from. The value is never transmitted to any other destination, never written to storage or disk, and never logged — logs record only that cookie's name and domain on success, or (on failure to find it) the domains of whatever cookies were visible at that scope plus the names of any XSRF-shaped candidates, still no value, ever, for any cookie. Never retained after the request completes. It is not "collected" in the sense of being gathered, stored, or reused — it is read once per import and used once, immediately, for the single request that needs it. |
 | Personal communications | No | — |
 | Location | No | — |
 | Web history | No | — |
@@ -173,8 +192,9 @@ sufficient and why no standing access is needed, and it was built with that in m
     `extension/background.js` and `src/origins.ts` — a wildcard pattern is refused before
     `chrome.permissions.request()` is ever called.
   - CSRF cookie handling: `src/csrf.ts` (`findXsrfCookie`, `cookieDomains`,
-    `xsrfCandidateNames`) and its call site in `extension/background.js` — note the value is
-    never logged, only the cookie name/domain.
+    `xsrfCandidateNames`) and its call site in `extension/background.js` — note no cookie value
+    is ever logged, for any cookie; only the selected cookie's name/domain on success, or
+    unfiltered cookie domains plus XSRF-shaped names on failure.
   - No storage of any kind: no calls to `chrome.storage`, `localStorage`, `sessionStorage`, or
     IndexedDB anywhere in `extension/` or `src/`.
   - No remote code: all files are local to the package; `extension/lib/*.js` is compiled from

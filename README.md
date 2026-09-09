@@ -43,6 +43,6 @@ Full list, with risk for each: `RELEASE-BLOCKERS.md`.
 ## More
 
 - `CLAUDE.md` — architecture, permissions model, auth, known limitations.
-- `docs/PRIVACY.md` — privacy policy draft.
+- `docs/PRIVACY.md` — privacy policy.
 - `docs/STORE-PERMISSIONS.md` — Chrome Web Store permission justifications.
 - `RELEASE-BLOCKERS.md` — everything standing between this and a public release.
