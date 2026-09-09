@@ -1031,11 +1031,19 @@
         body
       );
 
-      // 409 means the item is already present. That is a non-success, but it is
-      // not a failure the user must act on, so it reads as a plain statement
-      // rather than "Failed: Already imported...", which contradicts itself.
-      // The absence of the success tick still distinguishes it visually.
-      if (status === 409) {
+      // The service worker computes the label text itself (src/import-error.ts,
+      // compiled to extension/lib/import-error.js) so it can special-case
+      // things like the "package too large for Privilege Cloud" server error
+      // without duplicating that logic here. Fall back to the pre-existing
+      // status/body rendering when it's absent, so behaviour is unchanged for
+      // any response shape that doesn't set it.
+      if (response && typeof response.message === "string" && response.message) {
+        setButtonLabel(btn, response.message);
+      } else if (status === 409) {
+        // 409 means the item is already present. That is a non-success, but it is
+        // not a failure the user must act on, so it reads as a plain statement
+        // rather than "Failed: Already imported...", which contradicts itself.
+        // The absence of the success tick still distinguishes it visually.
         setButtonLabel(btn, "Already imported into this tenant");
       } else {
         var reason = status ? "HTTP " + status : "unknown error";
