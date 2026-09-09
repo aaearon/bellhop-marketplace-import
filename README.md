@@ -30,7 +30,22 @@ permissions and the confirmation dialog behave identically no matter which
 path you use — install method doesn't change the security model (see
 `CLAUDE.md`, "Permissions").
 
-### 1. Load unpacked — developers and evaluators
+### 1. Load unpacked — most people
+
+Get the files one of two ways.
+
+**Download a release** — no toolchain, nothing to build:
+
+1. Grab `bellhop-<version>.zip` from
+   [Releases](https://github.com/aaearon/bellhop-marketplace-import/releases/latest).
+2. Extract it. The extracted folder *is* the extension directory — it holds
+   `manifest.json` at its top level, so it is what you point the browser at
+   below, in place of `extension/`.
+
+The release zip is built by CI from a tagged commit and already contains the
+compiled `lib/`, so it needs no build step.
+
+**Or build from source** — for contributors, or to run unreleased changes:
 
 ```
 npm install
@@ -40,16 +55,21 @@ npm run build
 `npm run build` compiles `src/` into `extension/lib/`, which is gitignored
 and absent from a fresh clone. Skip it and the extension still loads, but
 fails at runtime with a module-not-found in the service worker's console and
-no compile-time error (see `CLAUDE.md`, "Conventions").
+no compile-time error (see `CLAUDE.md`, "Conventions"). This is the one way
+to get a broken install that looks fine until you click the button, and it
+is why the release zip is the safer choice if you are not changing code.
+
+Then, whichever way you got the files:
 
 - **Chrome:** `chrome://extensions` → toggle **Developer mode** (top right)
   → **Load unpacked** → select the `extension/` directory.
 - **Edge:** `edge://extensions` → toggle **Developer mode** (left sidebar) →
   **Load unpacked** → select the same `extension/` directory.
 
-Point the picker at `extension/` itself — not the repo root (no
-`manifest.json` there) and not a zip (neither browser's unpacked loader
-accepts one).
+Point the picker at the directory holding `manifest.json` — `extension/` in a
+clone, or the extracted release folder. Not the repo root (no `manifest.json`
+there) and not the zip itself (neither browser's unpacked loader accepts an
+archive).
 
 Each load-unpacked install gets its own extension ID, generated from a hash
 of the absolute path to `extension/` on that machine — not the ID a store
@@ -105,15 +125,17 @@ Windows/macOS-specific requirements for this path (e.g. domain-join or MDM
 enrollment) are documented on the policy pages linked above; they aren't
 re-verified here since this is written from a Linux dev machine.
 
-### 3. The packaged zip
+### 3. Building the zip yourself
 
 ```
 npm run package
 ```
 
-produces `dist/bellhop-<version>.zip` (currently
-`dist/bellhop-0.1.0.zip`). It's a Chrome Web Store / Edge Add-ons upload
-artifact, and — because it's just the same files as `extension/` zipped up —
+produces `dist/bellhop-<version>.zip` — the same artifact attached to each
+release, so you only need this to package an untagged commit. Pushing a `v*`
+tag runs it in CI and publishes the result; see `.github/workflows/release.yml`.
+
+It's a Chrome Web Store / Edge Add-ons upload artifact, and — because it's just the same files as `extension/` zipped up —
 it also works if you extract it and load the result unpacked (path 1). **It
 is not a CRX.** Chrome and Edge don't accept a zip via drag-and-drop or any
 other direct-install gesture; there's no shortcut from this file to an
