@@ -27,6 +27,27 @@
     "platform": "Platform",
   };
 
+  // --- logging safety ---------------------------------------------------
+  // Mirrors safeUrlForLog() in extension/background.js: keeps the origin and
+  // path (useful for diagnosis, carries nothing secret) and drops the query
+  // string and fragment outright. Every url logged from this file goes
+  // through it, because the artifact download url is a presigned AWS S3 link
+  // whose query string carries live credentials (X-Amz-Signature,
+  // X-Amz-Credential, X-Amz-Security-Token) — those must never reach the
+  // page console. Do not re-widen this to log the full url.
+  //
+  // Never throws, on any input: a logging helper must not be able to break
+  // the import path.
+  function safeUrlForLog(url) {
+    if (typeof url !== "string" || !url) return "(unparseable url)";
+    try {
+      var parsed = new URL(url, location.href);
+      return parsed.origin + parsed.pathname;
+    } catch (err) {
+      return "(unparseable url)";
+    }
+  }
+
   function getProductName(detail) {
     var value = detail && typeof detail === "object" ? detail.name : null;
     if (typeof value === "string" && value.trim()) {
@@ -57,10 +78,13 @@
   function getCurrentUuid() {
     var match = location.href.match(UUID_RE);
     var uuid = match ? match[0] : null;
+    // Redacted through safeUrlForLog: this frame is handed to us by the
+    // tenant's SSO shell, so its url's query/fragment can carry session
+    // handoff params. The uuid — the only part actually needed here — is
+    // logged separately below.
     console.log(
-      "[bellhop] getCurrentUuid: href=%s pathname=%s -> uuid=%s",
-      location.href,
-      location.pathname,
+      "[bellhop] getCurrentUuid: url=%s -> uuid=%s",
+      safeUrlForLog(location.href),
       uuid
     );
     return uuid;
@@ -172,10 +196,18 @@
 
     if (!loggedDownloadResponse) {
       loggedDownloadResponse = true;
+      // NEVER log `payload` wholesale. payload.url is a presigned S3 link and
+      // its query string carries live AWS credentials — see safeUrlForLog.
+      // The remaining fields are non-secret and are the ones worth having
+      // when a download goes wrong (an expired link, a missing artifact).
       console.log(
-        "[bellhop] /api/downloads/integrations/%s raw response:",
+        "[bellhop] /api/downloads/integrations/%s response: url=%s expiresAt=%s expiresIn=%s fileName=%s sha256=%s",
         uuid,
-        payload
+        safeUrlForLog(payload && payload.url),
+        payload && payload.expiresAt,
+        payload && payload.expiresIn,
+        payload && payload.fileName,
+        payload && payload.sha256
       );
     }
 
@@ -315,18 +347,18 @@
   // openConfirmDialog awaits a fetch (the download url) and a permissions
   // check before it renders anything, so the click needs its own feedback
   // for that gap or it reads as broken. The spinner is a small inline CSS
-  // animation injected once, prefixed "idira-" so it can't collide with the
+  // animation injected once, prefixed "bellhop-" so it can't collide with the
   // host SPA's styles; it respects prefers-reduced-motion by simply not
   // being shown (falls back to the "Preparing…" text alone).
-  var SPINNER_STYLE_ID = "idira-spinner-style";
-  var BTN_LOADING_CLASS = "idira-btn-loading";
+  var SPINNER_STYLE_ID = "bellhop-spinner-style";
+  var BTN_LOADING_CLASS = "bellhop-btn-loading";
 
   function ensureSpinnerStyles() {
     if (document.getElementById(SPINNER_STYLE_ID)) return;
     var style = document.createElement("style");
     style.id = SPINNER_STYLE_ID;
     style.textContent = [
-      ".idira-spinner {",
+      ".bellhop-spinner {",
       "  display:inline-block;",
       "  width:10px;",
       "  height:10px;",
@@ -337,12 +369,12 @@
       "  border-radius:50%;",
       "}",
       "@media (prefers-reduced-motion: no-preference) {",
-      "  .idira-spinner { animation: idira-spin .6s linear infinite; }",
+      "  .bellhop-spinner { animation: bellhop-spin .6s linear infinite; }",
       "}",
       "@media (prefers-reduced-motion: reduce) {",
-      "  .idira-spinner { display:none; }",
+      "  .bellhop-spinner { display:none; }",
       "}",
-      "@keyframes idira-spin { to { transform: rotate(360deg); } }",
+      "@keyframes bellhop-spin { to { transform: rotate(360deg); } }",
     ].join("\n");
     document.head.appendChild(style);
   }
@@ -370,7 +402,7 @@
     btn.disabled = true;
     btn.classList.add(BTN_LOADING_CLASS);
     var spinner = document.createElement("span");
-    spinner.className = "idira-spinner";
+    spinner.className = "bellhop-spinner";
     spinner.setAttribute("aria-hidden", "true");
     var label = btn.querySelector(".p-button-label");
     if (label) {
@@ -388,7 +420,7 @@
   function clearButtonLoading(btn) {
     btn.disabled = false;
     btn.classList.remove(BTN_LOADING_CLASS);
-    var spinner = btn.querySelector(".idira-spinner");
+    var spinner = btn.querySelector(".bellhop-spinner");
     if (spinner && spinner.parentNode) {
       spinner.parentNode.removeChild(spinner);
     }
