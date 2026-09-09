@@ -6,8 +6,8 @@ A Chrome MV3 extension spike: adds an "Import to tenant" button beside the
 "Download" button on Idira marketplace connection-component pages. Instead of
 downloading the artifact zip and hand-uploading it, the button imports it
 directly into the same tenant's Privilege Cloud. Confirmed working end-to-end
-against a live tenant, for a single connection-component product, as a super
-admin.
+against a live tenant (`acme-poc`), for a single connection-component
+product, as a super admin.
 
 "Idira" is Palo Alto Networks' rebrand of CyberArk. Product docs live at
 docs.cyberark.com. The public marketplace is marketplace.idira.pan.dev.
@@ -79,9 +79,25 @@ it only checks the two-byte `PK` magic header before forwarding it.
 The service worker's `fetch` with `credentials: 'include'` plus
 `host_permissions` carries the tenant session cookie — Chrome treats
 extension-initiated requests as same-site when the extension holds host
-permissions for the target. No CSRF header was required for the import POST
-in testing. `src/csrf.ts` (`findXsrfCookie`) exists and is unit-tested but is
-deliberately not wired into `extension/background.js`.
+permissions for the target. This alone gets the session cookie accepted by
+the PAM API: the first import attempt without a CSRF header returned
+`HTTP 400 - CSRF validation failed`, not a 401/403, confirming the cookie
+was accepted and only the double-submit CSRF token was missing.
+
+CSRF is required, and `src/csrf.ts` is wired into `extension/background.js`.
+The worker reads the token with
+`chrome.cookies.getAll({ url: origins.pcloudOrigin })` — the `url` form,
+because the token cookie may be scoped to `.cyberark.cloud` rather than the
+pcloud host — and selects the `XSRF-TOKEN-<guid>` cookie via
+`findXsrfCookie()`. `extension/manifest.json` requires
+`"permissions": ["cookies"]` for this.
+
+Open question: the correct request header **name** is still unknown. The
+code sends the token under both `X-XSRF-TOKEN` and `X-<cookie name>` (e.g.
+`X-XSRF-TOKEN-<guid>`), since an extra unrecognized header is harmless but a
+missing one fails the request. It works, but which header the server
+actually honours is unconfirmed — narrow it by removing one header at a
+time and re-testing.
 
 ## Known limitations
 
@@ -114,10 +130,14 @@ deliberately not wired into `extension/background.js`.
   worker source files under `extension/` are plain JS: content scripts
   cannot use ESM imports, so `content.js` is a single IIFE; `background.js`
   is a module worker and imports from `extension/lib/`.
-- No bundler. `npm run build` runs `tsc -p tsconfig.build.json`, which
-  compiles only `src/tenant.ts` and `src/base64.ts` into `extension/lib/`
-  (gitignored). `src/csrf.ts` is not part of the build since it isn't wired
-  up yet.
+- No bundler. `npm run build` runs `tsc -p tsconfig.build.json`
+  (`include: ["src"]`), compiling all of `src/` into `extension/lib/`
+  (gitignored) as ES modules for `background.js` to import. Convention:
+  anything under `src/` that the extension imports must be covered by that
+  `include` — listing individual files instead of the `src` directory
+  silently omits new ones (no compile error, only a runtime
+  module-not-found in the service worker), which is what happened to
+  `csrf.ts` before this was fixed.
 - Tests: vitest, `npx vitest run` (or `npm test`). Pure functions
   (`base64.ts`, `csrf.ts`, `tenant.ts`) are unit-tested. DOM/network paths in
   `extension/content.js` and `extension/background.js` are not — they were
