@@ -2,9 +2,11 @@
 # Run: python3 tools/make-icons.py   (from the repo root; paths are repo-root-relative)
 """Generate the Bellhop Chrome extension icon set, standalone and deterministic.
 
-Writes extension/icons/icon{16,32,48,128}.png and extension/icons/preview.png.
-No dependency on anything outside this repo -- the SVG artwork, the rasteriser
-invocation, and the downsample/mask pipeline are all inline below.
+Writes extension/icons/icon{16,32,48,128}.png, extension/icons/preview.png,
+and docs/images/promo-tile-440x280.png (the Chrome Web Store "small promo
+tile"; Edge accepts the same dimensions, optionally). No dependency on
+anything outside this repo -- the SVG artwork, the rasteriser invocation, and
+the downsample/mask pipeline are all inline below.
 
 Deliberate size split (do not simplify to one artwork for all sizes):
   - 128px and 48px  -> the full Bellhop CHARACTER (bellhop cap, torso, arms,
@@ -43,6 +45,18 @@ from PIL import Image, ImageDraw, ImageFont
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ICONS_DIR = os.path.join(REPO_ROOT, "extension", "icons")
+PROMO_TILE_PATH = os.path.join(REPO_ROOT, "docs", "images", "promo-tile-440x280.png")
+PROMO_TILE_SIZE = (440, 280)  # Chrome Web Store "small promo tile"; Edge accepts the same size
+
+# Bold sans TrueType fonts to try for the promo tile's "Bellhop" wordmark, in
+# preference order. Both are commonly-packaged Linux distro fonts (Liberation
+# Sans is metric-compatible with Helvetica/Arial); if neither is installed,
+# find_font() raises rather than silently falling back to Pillow's default
+# bitmap font, which is illegible at the sizes this tile needs.
+WORDMARK_FONT_CANDIDATES = [
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+]
 
 S = 1024  # master SVG canvas (both character and mark render at this size)
 
@@ -474,6 +488,66 @@ def build_preview(icons: dict[int, Image.Image]) -> Image.Image:
     return sheet
 
 
+def find_wordmark_font(size: int) -> ImageFont.FreeTypeFont:
+    """Return the first available candidate from WORDMARK_FONT_CANDIDATES at
+    `size`, or raise a clear error -- never silently drop to Pillow's default
+    bitmap font, which does not scale and looks broken at promo-tile size."""
+    for candidate in WORDMARK_FONT_CANDIDATES:
+        if os.path.exists(candidate):
+            return ImageFont.truetype(candidate, size)
+    raise RuntimeError(
+        "No usable bold TrueType font found for the promo tile wordmark. Tried: "
+        + ", ".join(WORDMARK_FONT_CANDIDATES)
+        + " -- install one (e.g. `apt-get install fonts-liberation`) and re-run."
+    )
+
+
+# =============================================================== promo tile
+def build_promo_tile(character_master: Image.Image) -> Image.Image:
+    """Build the 440x280 Chrome Web Store small promo tile.
+
+    Reuses the full Bellhop character render (not the reduced parcel mark --
+    at this size the character silhouette reads fine, see the size split
+    documented at the top of this file) beside a "Bellhop" wordmark, on a
+    flat IDIRA_CHARCOAL background matching the icon set's own palette. No
+    third-party name appears anywhere on it, by design (see CLAUDE.md).
+
+    Returns a flat RGB image (no alpha channel) -- store listing surfaces
+    render this tile over varying page backgrounds, so a transparent edge
+    would show whatever is behind it.
+    """
+    w, h = PROMO_TILE_SIZE
+    tile = Image.new("RGB", (w, h), IDIRA_CHARCOAL)
+    draw = ImageDraw.Draw(tile)
+
+    # character_master's own SVG (see svg_character) already fills its full
+    # 1024x1024 canvas with IDIRA_CHARCOAL, so pasting the resized render
+    # straight onto this same-colour background leaves no seam -- no alpha
+    # compositing or rounded-corner mask needed (that treatment is Chrome's
+    # app-icon convention, not a promo tile's).
+    margin_y = 40
+    char_side = h - margin_y * 2
+    char_img = character_master.convert("RGB").resize((char_side, char_side), Image.LANCZOS)
+
+    word = "Bellhop"
+    font = find_wordmark_font(48)
+    bbox = draw.textbbox((0, 0), word, font=font)
+    text_w, text_h = bbox[2] - bbox[0], bbox[3] - bbox[1]
+
+    gap = 24
+    group_w = char_img.width + gap + text_w
+    start_x = (w - group_w) // 2
+
+    char_x, char_y = start_x, (h - char_img.height) // 2
+    tile.paste(char_img, (char_x, char_y))
+
+    text_x = char_x + char_img.width + gap - bbox[0]
+    text_y = (h - text_h) // 2 - bbox[1]
+    draw.text((text_x, text_y), word, font=font, fill=IDIRA_WHITE)
+
+    return tile
+
+
 def main() -> None:
     os.makedirs(ICONS_DIR, exist_ok=True)
 
@@ -503,6 +577,11 @@ def main() -> None:
     preview_path = os.path.join(ICONS_DIR, "preview.png")
     preview.save(preview_path)
     print(f"wrote {preview_path} ({preview.size[0]}x{preview.size[1]})")
+
+    os.makedirs(os.path.dirname(PROMO_TILE_PATH), exist_ok=True)
+    promo_tile = build_promo_tile(character_glint)
+    promo_tile.save(PROMO_TILE_PATH)
+    print(f"wrote {PROMO_TILE_PATH} ({promo_tile.size[0]}x{promo_tile.size[1]})")
 
 
 if __name__ == "__main__":

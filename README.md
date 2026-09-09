@@ -49,6 +49,8 @@ Full list, with risk for each: `RELEASE-BLOCKERS.md`.
 ## More
 
 - `CLAUDE.md` — architecture, permissions model, auth, known limitations.
-- `docs/PRIVACY.md` — privacy policy.
-- `docs/STORE-PERMISSIONS.md` — Chrome Web Store permission justifications.
+- [Privacy policy](https://aaearon.github.io/bellhop-marketplace-import/privacy/) — published from
+  `docs/PRIVACY.md`; this is the URL submitted to the Chrome Web Store and Edge Add-ons.
+- [Store permission justifications](https://aaearon.github.io/bellhop-marketplace-import/store-permissions/)
+  — published from `docs/STORE-PERMISSIONS.md`.
 - `RELEASE-BLOCKERS.md` — everything standing between this and a public release.

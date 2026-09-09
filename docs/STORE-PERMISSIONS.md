@@ -1,3 +1,9 @@
+---
+layout: default
+title: Store Permission Justifications
+permalink: /store-permissions/
+---
+
 # Chrome Web Store Submission — Bellhop
 
 > Distribution is confirmed for both the Chrome Web Store and Microsoft Edge Add-ons. This
@@ -51,16 +57,21 @@ cookie. No cookie is ever written.
 
 ### Host permissions
 
-**Declared, not granted at install.** `extension/manifest.json` lists every host pattern the
-extension may ever ask for under `optional_host_permissions` — never under `host_permissions`.
-On installation the extension holds **zero** host access. The two declared patterns are:
+**These two patterns are declarations of what may ever be asked for. They are never requested and
+never held.** `extension/manifest.json` lists every host pattern the extension may ever ask for
+under `optional_host_permissions` — never under `host_permissions`. On installation the extension
+holds **zero** host access, and at no point does it hold either pattern below as a standing grant.
+A reviewer who sees the literal string `https://*.amazonaws.com/*` in the manifest is looking at
+the ceiling on what can be asked for, not at what is requested or granted:
 
 - `https://*.cyberark.cloud/*`
 - `https://*.amazonaws.com/*`
 
 **What is actually requested, at runtime, on the user's Import click** is never one of those
-wildcards. It is exactly two specific origins, computed per import and validated against an
-allowlist that rejects wildcard forms (`isAllowedOriginPattern`, `src/origins.ts`):
+wildcards. It is exactly two specific origins, computed per import and checked against an
+allowlist before `chrome.permissions.request()` is ever called. That allowlist — the enforcement
+point that keeps a wildcard from ever reaching `request()` — is a single function,
+`isAllowedOriginPattern` in `src/origins.ts`, and it is unit-tested in `test/origins.test.ts`:
 
 1. **The one tenant's Privilege Cloud host** — `https://<tenant>-pcloud.cyberark.cloud/*` — to
    POST the artifact to the tenant the user is currently viewing and confirmed in the dialog. The
@@ -72,22 +83,39 @@ allowlist that rejects wildcard forms (`isAllowedOriginPattern`, `src/origins.ts
    is never hardcoded), so the artifact bytes can be fetched. This origin is derived by the
    extension from a URL the user's own marketplace session returned, not supplied by any other
    party. It is additionally required to be an S3 endpoint host, so a manipulated download URL
-   cannot win a grant for some other AWS-hosted service.
+   cannot win a grant for some other AWS-hosted service. Path-style S3 endpoints
+   (`s3.amazonaws.com`, `s3.<region>.amazonaws.com`) are rejected outright even though they are
+   real S3 hosts: that hostname is shared by every bucket in the region, so granting it would
+   grant access to all of them, not just the one artifact bucket. Only virtual-hosted-style
+   origins (`<bucket>.s3.<region>.amazonaws.com` and its access-point/S3-Express variants) pass.
 
-**Why there is no lesser alternative:** The tenant hostname is not known until the user is on that
-tenant's page, so `optional_host_permissions` must declare a pattern, not a fixed origin — Chrome
-requires the *possible* scope to be declared even though nothing in that scope is granted. The
-artifact bucket name is vendor-internal and changes without notice, so the same applies to
-`*.amazonaws.com`. In both cases the declaration is the widest Chrome's model allows the extension
-to *ask about*; the request is narrowed to one concrete host at the moment it is needed, and
-`chrome.permissions.request()` is called with only that narrowed set — the wildcard pattern is
-never passed to `request()`, and the code path that would do so is explicitly refused
-(`background.js`, `originsToRequest` / `isAllowedOriginPattern`).
+**Why no narrower static pattern is possible:** Neither wildcard can be replaced by a fixed
+hostname in the manifest, for two independent reasons:
+
+- The tenant hostname and the S3 bucket hostname are both **unknown until runtime**. The tenant is
+  whatever tenant the user happens to be signed into when they click Import; the artifact bucket
+  name is a vendor-internal, Jenkins-generated string that has already changed once without
+  notice. There is no fixed value either pattern could name instead.
+- Even if the tenant name were knowable ahead of time, **Chrome match patterns cannot express a
+  partial subdomain wildcard.** A pattern like `https://*-pcloud.cyberark.cloud/*` — wildcarding
+  only the tenant-name segment of the host while fixing the rest — is rejected by Chrome outright
+  as an invalid host wildcard; the same restriction is why `content_scripts.matches` (see below)
+  is broad for the identical reason. `https://*.cyberark.cloud/*` and `https://*.amazonaws.com/*`
+  are the narrowest forms Chrome's manifest syntax allows that still cover a per-tenant or
+  per-bucket host at all.
+
+Given that, the declaration is pinned at the widest scope Chrome's model allows the extension to
+*ask about*, and the actual request is narrowed in code, at runtime, to one concrete host per
+import — narrower than the manifest can express, validated by `isAllowedOriginPattern`, and never
+widened back out to either declared wildcard.
 
 **What it is not used for:** No standing grant is ever created. A user who has approved tenant A
 has no access granted to tenant B; each tenant requires its own explicit approval, shown as a
 native Chrome permission prompt naming the exact origin. Nothing is granted silently, and nothing
-is granted for a tenant the user has not clicked Import against.
+is granted for a tenant the user has not clicked Import against. The extension does hold the
+narrow, per-tenant and per-artifact-host grants a user has actually approved, for as long as the
+user leaves them in place — access is minimized and revocable, not absent; see "Site access" in
+`chrome://extensions` to review or remove a grant.
 
 ### `content_scripts` — match pattern `https://*.cyberark.cloud/*` and `all_frames: true`
 
