@@ -3,6 +3,7 @@
 import { deriveOrigins } from './lib/tenant.js';
 import { arrayBufferToBase64 } from './lib/base64.js';
 import { findXsrfCookie } from './lib/csrf.js';
+import { classifyProduct, importPathFor } from './lib/classify.js';
 
 function safeUrlForLog(url) {
   try {
@@ -13,9 +14,20 @@ function safeUrlForLog(url) {
   }
 }
 
+function isValidKind(kind) {
+  return kind === "connection-component" || kind === "platform";
+}
+
 async function handleImport(msg) {
   var downloadUrl = msg.downloadUrl;
   var origin = msg.origin;
+  var kind = msg.kind;
+
+  if (!isValidKind(kind)) {
+    var kindMsg = "invalid or missing kind: " + JSON.stringify(kind);
+    console.log("[import-to-tenant]", kindMsg);
+    return { ok: false, status: 0, body: kindMsg, error: kindMsg };
+  }
 
   console.log("[import-to-tenant] fetching download url:", safeUrlForLog(downloadUrl));
 
@@ -51,7 +63,7 @@ async function handleImport(msg) {
   var b64 = arrayBufferToBase64(buf);
 
   var origins = deriveOrigins(origin);
-  var importUrl = origins.pcloudApiBase + "/ConnectionComponents/Import";
+  var importUrl = origins.pcloudApiBase + importPathFor(kind);
 
   // Double-submit CSRF: the tenant sets an XSRF-TOKEN-<guid> cookie whose
   // value must be echoed back in a header. Query by `url` so we get exactly
@@ -110,15 +122,34 @@ async function handleImport(msg) {
 }
 
 chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
-  if (!message || message.type !== "import") return false;
+  if (!message) return false;
 
-  handleImport(message)
-    .catch(function (err) {
-      var errMsg = err && err.message ? err.message : String(err);
-      console.log("[import-to-tenant] unexpected error:", errMsg);
-      return { ok: false, status: 0, body: errMsg, error: errMsg };
-    })
-    .then(sendResponse);
+  if (message.type === "classify") {
+    var kind;
+    try {
+      kind = classifyProduct(message.detail);
+    } catch (err) {
+      console.log(
+        "[import-to-tenant] classify threw unexpectedly:",
+        err && err.message ? err.message : String(err)
+      );
+      kind = null;
+    }
+    sendResponse(kind);
+    return false; // synchronous response
+  }
 
-  return true; // keep the message channel open for the async response
+  if (message.type === "import") {
+    handleImport(message)
+      .catch(function (err) {
+        var errMsg = err && err.message ? err.message : String(err);
+        console.log("[import-to-tenant] unexpected error:", errMsg);
+        return { ok: false, status: 0, body: errMsg, error: errMsg };
+      })
+      .then(sendResponse);
+
+    return true; // keep the message channel open for the async response
+  }
+
+  return false;
 });

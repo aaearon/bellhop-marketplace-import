@@ -33,21 +33,24 @@
     return uuid;
   }
 
-  // --- product detail / connection-component check ----------------------
-  function isConnectionComponent(detail) {
-    // The API exposes no explicit package-type field. Observed shape:
-    //   {hasArtifact: true, idiraServices: ["...","PRIVILEGE_CLOUD","PSM"], ...}
-    // `category` is NOT usable - it is "Data & database security" on one PSM
-    // connection component and "Idira platform & extensions" on another.
-    // Best available marker: a downloadable artifact plus PSM in idiraServices.
-    // This is a heuristic, not an authoritative type check.
-    if (!detail || typeof detail !== "object") return false;
-    if (detail.hasArtifact !== true) return false;
-    if (!Array.isArray(detail.idiraServices)) return false;
-    return detail.idiraServices.indexOf("PSM") !== -1;
+  // --- product detail / classification -----------------------------------
+  // Classification logic lives in src/classify.ts (compiled to
+  // extension/lib/classify.js) since it is covered by unit tests. This is a
+  // plain content script with no ESM imports, so it delegates to the
+  // service worker via messaging instead of duplicating the logic here.
+  async function classifyViaBackground(detail) {
+    try {
+      return await chrome.runtime.sendMessage({ type: "classify", detail: detail });
+    } catch (err) {
+      console.log(
+        "[import-to-tenant] classify message failed: %s",
+        err && err.message
+      );
+      return null;
+    }
   }
 
-  async function checkProductIsConnectionComponent(uuid) {
+  async function checkProductKind(uuid) {
     var url = "/api/integrations/" + encodeURIComponent(uuid);
     var res;
     try {
@@ -58,7 +61,7 @@
         uuid,
         err && err.message
       );
-      return false;
+      return null;
     }
 
     if (!res.ok) {
@@ -66,7 +69,7 @@
         "[import-to-tenant] product detail request failed: status=%s",
         res.status
       );
-      return false;
+      return null;
     }
 
     var detail;
@@ -74,7 +77,7 @@
       detail = await res.json();
     } catch (err) {
       console.log("[import-to-tenant] product detail response was not JSON");
-      return false;
+      return null;
     }
 
     if (!loggedProductDetail) {
@@ -86,14 +89,20 @@
       );
     }
 
-    var result = isConnectionComponent(detail);
-    if (!result) {
+    var kind = await classifyViaBackground(detail);
+    if (!kind) {
       console.log(
-        "[import-to-tenant] product %s does not look like a connection component; not injecting button (fail closed).",
+        "[import-to-tenant] product %s did not classify to an importable kind; not injecting button (fail closed).",
         uuid
       );
+    } else {
+      console.log(
+        "[import-to-tenant] product %s classified as: %s",
+        uuid,
+        kind
+      );
     }
-    return result;
+    return kind;
   }
 
   // --- download url extraction --------------------------------------------
@@ -141,7 +150,7 @@
     return !!document.getElementById(BTN_ID);
   }
 
-  function makeImportButton(downloadBtn, uuid) {
+  function makeImportButton(downloadBtn, uuid, kind) {
     var btn = document.createElement("button");
     btn.id = BTN_ID;
     btn.setAttribute("data-import-to-tenant-btn", "true");
@@ -150,13 +159,13 @@
     btn.textContent = "Import to tenant";
 
     btn.addEventListener("click", function () {
-      handleImportClick(btn, uuid);
+      handleImportClick(btn, uuid, kind);
     });
 
     return btn;
   }
 
-  async function handleImportClick(btn, uuidAtClickTime) {
+  async function handleImportClick(btn, uuidAtClickTime, kind) {
     btn.disabled = true;
     btn.textContent = "Importing…";
 
@@ -175,6 +184,7 @@
         downloadUrl: downloadUrl,
         uuid: uuidAtClickTime,
         origin: location.origin,
+        kind: kind,
       });
     } catch (err) {
       btn.textContent = "Failed: " + (err && err.message ? err.message : "message failed");
@@ -209,15 +219,15 @@
       return; // Download button not on screen right now; nothing to anchor to.
     }
 
-    var ok = await checkProductIsConnectionComponent(uuid);
-    if (!ok) return;
+    var kind = await checkProductKind(uuid);
+    if (!kind) return;
 
     // Re-check after the await in case the SPA re-rendered or route changed.
     if (buttonPresent()) return;
     downloadBtn = findDownloadButton();
     if (!downloadBtn) return;
 
-    var importBtn = makeImportButton(downloadBtn, uuid);
+    var importBtn = makeImportButton(downloadBtn, uuid, kind);
     downloadBtn.insertAdjacentElement("afterend", importBtn);
   }
 

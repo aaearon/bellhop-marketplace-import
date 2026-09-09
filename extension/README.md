@@ -1,4 +1,4 @@
-# Import to tenant
+# Idira Marketplace Importer
 
 Adds an "Import to tenant" button next to Download on marketplace
 connection-component product pages; the background service worker
