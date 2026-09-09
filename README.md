@@ -37,7 +37,10 @@ Get the files one of two ways.
 **Download a release** — no toolchain, nothing to build:
 
 1. Grab `bellhop-<version>.zip` from
-   [Releases](https://github.com/aaearon/bellhop-marketplace-import/releases/latest).
+   [Releases](https://github.com/aaearon/bellhop-marketplace-import/releases),
+   newest at the top. Every release below `1.0.0` is marked a prerelease —
+   deliberately, this is spike-quality — so GitHub's "latest release" link
+   skips them and you want the list.
 2. Extract it. The extracted folder *is* the extension directory — it holds
    `manifest.json` at its top level, so it is what you point the browser at
    below, in place of `extension/`.
