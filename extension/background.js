@@ -59,7 +59,7 @@ async function handleImport(msg) {
 
   if (!isValidKind(kind)) {
     var kindMsg = "invalid or missing kind: " + JSON.stringify(kind);
-    console.log("[import-to-tenant]", kindMsg);
+    console.log("[bellhop]", kindMsg);
     return { ok: false, status: 0, body: kindMsg, error: kindMsg };
   }
 
@@ -68,11 +68,11 @@ async function handleImport(msg) {
   // Fail closed rather than fetching an origin we would never have asked for.
   if (!s3OriginPatternFromDownloadUrl(downloadUrl)) {
     var originMsg = "refusing to fetch artifact: invalid download origin";
-    console.log("[import-to-tenant] %s (%s)", originMsg, safeUrlForLog(downloadUrl));
+    console.log("[bellhop] %s (%s)", originMsg, safeUrlForLog(downloadUrl));
     return { ok: false, status: 0, body: originMsg, error: originMsg };
   }
 
-  console.log("[import-to-tenant] fetching download url:", safeUrlForLog(downloadUrl));
+  console.log("[bellhop] fetching download url:", safeUrlForLog(downloadUrl));
 
   var s3Res;
   try {
@@ -81,7 +81,7 @@ async function handleImport(msg) {
     s3Res = await fetch(downloadUrl);
   } catch (err) {
     var msgText = "S3 fetch failed: " + (err && err.message ? err.message : String(err));
-    console.log("[import-to-tenant]", msgText);
+    console.log("[bellhop]", msgText);
     return { ok: false, status: 0, body: msgText, error: msgText };
   }
 
@@ -90,7 +90,7 @@ async function handleImport(msg) {
       s3Res.status === 403
         ? "download link expired or rejected (403)"
         : "S3 fetch failed with status " + s3Res.status;
-    console.log("[import-to-tenant]", failMsg);
+    console.log("[bellhop]", failMsg);
     return { ok: false, status: s3Res.status, body: failMsg, error: failMsg };
   }
 
@@ -99,7 +99,7 @@ async function handleImport(msg) {
 
   if (bytes.length < 2 || bytes[0] !== 0x50 || bytes[1] !== 0x4b) {
     var zipMsg = "not a valid zip (bad signature)";
-    console.log("[import-to-tenant]", zipMsg);
+    console.log("[bellhop]", zipMsg);
     return { ok: false, status: 0, body: zipMsg, error: zipMsg };
   }
 
@@ -137,7 +137,7 @@ async function handleImport(msg) {
       "no usable XSRF-TOKEN cookie: " + cookies.length +
       " cookies, domains " + domains +
       ", XSRF-shaped: " + names;
-    console.log("[import-to-tenant] %s (target %s)", noTokenMsg, origins.pcloudOrigin);
+    console.log("[bellhop] %s (target %s)", noTokenMsg, origins.pcloudOrigin);
     return { ok: false, status: 0, body: noTokenMsg, error: noTokenMsg };
   }
 
@@ -150,7 +150,7 @@ async function handleImport(msg) {
     return c.name === xsrf.name && c.value === xsrf.value;
   })[0];
   console.log(
-    "[import-to-tenant] csrf cookie selected: name=%s domain=%s",
+    "[bellhop] csrf cookie selected: name=%s domain=%s",
     xsrf.name,
     (selected && selected.domain) || "(unknown)"
   );
@@ -163,7 +163,7 @@ async function handleImport(msg) {
   headers["X-" + xsrf.name] = xsrf.value;
 
   console.log(
-    "[import-to-tenant] posting import to: %s (csrf cookie=%s, headers sent=%s)",
+    "[bellhop] posting import to: %s (csrf cookie=%s, headers sent=%s)",
     importUrl,
     xsrf.name,
     "X-XSRF-TOKEN, X-" + xsrf.name
@@ -179,7 +179,7 @@ async function handleImport(msg) {
     });
   } catch (err) {
     var postMsg = "import POST failed: " + (err && err.message ? err.message : String(err));
-    console.log("[import-to-tenant]", postMsg);
+    console.log("[bellhop]", postMsg);
     return { ok: false, status: 0, body: postMsg, error: postMsg };
   }
 
@@ -190,7 +190,7 @@ async function handleImport(msg) {
   // wording (e.g. 409 -> "already imported"), but the raw detail must stay
   // available for debugging.
   console.log(
-    "[import-to-tenant] import response: status=%s body=%s",
+    "[bellhop] import response: status=%s body=%s",
     importRes.status,
     bodyText
   );
@@ -213,7 +213,7 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
 
     if (!plan.ok || plan.origins.length === 0) {
       console.log(
-        "[import-to-tenant] refusing permissions.request (%s) for: %s",
+        "[bellhop] refusing permissions.request (%s) for: %s",
         plan.error || "empty origin set",
         JSON.stringify(message.origins)
       );
@@ -226,7 +226,7 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
     chrome.permissions.request({ origins: requested }, function (granted) {
       if (chrome.runtime.lastError) {
         console.log(
-          "[import-to-tenant] permissions.request failed:",
+          "[bellhop] permissions.request failed:",
           chrome.runtime.lastError.message
         );
         sendResponse({ ok: false, error: chrome.runtime.lastError.message });
@@ -244,7 +244,7 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
       kind = classifyProduct(message.detail);
     } catch (err) {
       console.log(
-        "[import-to-tenant] classify threw unexpectedly:",
+        "[bellhop] classify threw unexpectedly:",
         err && err.message ? err.message : String(err)
       );
       kind = null;
@@ -261,7 +261,7 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
       pcloudOrigin = origins.pcloudOrigin;
     } catch (err) {
       console.log(
-        "[import-to-tenant] deriveOrigins failed for classify request:",
+        "[bellhop] deriveOrigins failed for classify request:",
         err && err.message ? err.message : String(err)
       );
     }
@@ -291,7 +291,7 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
       })
       .catch(function (err) {
         var permMsg = err && err.message ? err.message : String(err);
-        console.log("[import-to-tenant] permissions.contains failed:", permMsg);
+        console.log("[bellhop] permissions.contains failed:", permMsg);
         sendResponse({ ok: false });
       });
 
@@ -302,7 +302,7 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
     handleImport(message)
       .catch(function (err) {
         var errMsg = err && err.message ? err.message : String(err);
-        console.log("[import-to-tenant] unexpected error:", errMsg);
+        console.log("[bellhop] unexpected error:", errMsg);
         return { ok: false, status: 0, body: errMsg, error: errMsg };
       })
       .then(sendResponse);

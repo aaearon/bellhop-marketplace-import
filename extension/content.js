@@ -11,7 +11,7 @@
     return;
   }
 
-  var BTN_ID = "import-to-tenant-btn";
+  var BTN_ID = "bellhop-btn";
   var IMPORT_BTN_LABEL = "Import to Privilege Cloud";
   var loggedProductDetail = false;
   var loggedDownloadResponse = false;
@@ -21,7 +21,7 @@
   // or a second dialog.
   var dialogOpen = false;
 
-  var DIALOG_PREFIX = "import-to-tenant-dialog";
+  var DIALOG_PREFIX = "bellhop-dialog";
 
   var KIND_LABELS = {
     "connection-component": "PSM connection component",
@@ -46,7 +46,7 @@
     var match = location.href.match(UUID_RE);
     var uuid = match ? match[0] : null;
     console.log(
-      "[import-to-tenant] getCurrentUuid: href=%s pathname=%s -> uuid=%s",
+      "[bellhop] getCurrentUuid: href=%s pathname=%s -> uuid=%s",
       location.href,
       location.pathname,
       uuid
@@ -71,7 +71,7 @@
       });
     } catch (err) {
       console.log(
-        "[import-to-tenant] classify message failed: %s",
+        "[bellhop] classify message failed: %s",
         err && err.message
       );
       return null;
@@ -87,7 +87,7 @@
       res = await fetch(url, { credentials: "same-origin" });
     } catch (err) {
       console.log(
-        "[import-to-tenant] product detail fetch failed for %s: %s",
+        "[bellhop] product detail fetch failed for %s: %s",
         uuid,
         err && err.message
       );
@@ -96,7 +96,7 @@
 
     if (!res.ok) {
       console.log(
-        "[import-to-tenant] product detail request failed: status=%s",
+        "[bellhop] product detail request failed: status=%s",
         res.status
       );
       return null;
@@ -106,14 +106,14 @@
     try {
       detail = await res.json();
     } catch (err) {
-      console.log("[import-to-tenant] product detail response was not JSON");
+      console.log("[bellhop] product detail response was not JSON");
       return null;
     }
 
     if (!loggedProductDetail) {
       loggedProductDetail = true;
       console.log(
-        "[import-to-tenant] /api/integrations/%s raw response: %s",
+        "[bellhop] /api/integrations/%s raw response: %s",
         uuid,
         JSON.stringify(detail)
       );
@@ -124,14 +124,14 @@
 
     if (!kind) {
       console.log(
-        "[import-to-tenant] product %s did not classify to an importable kind; not injecting button (fail closed).",
+        "[bellhop] product %s did not classify to an importable kind; not injecting button (fail closed).",
         uuid
       );
       return null;
     }
 
     console.log(
-      "[import-to-tenant] product %s classified as: %s",
+      "[bellhop] product %s classified as: %s",
       uuid,
       kind
     );
@@ -160,7 +160,7 @@
     if (!loggedDownloadResponse) {
       loggedDownloadResponse = true;
       console.log(
-        "[import-to-tenant] /api/downloads/integrations/%s raw response:",
+        "[bellhop] /api/downloads/integrations/%s raw response:",
         uuid,
         payload
       );
@@ -186,7 +186,7 @@
   // inserted as a sibling right after the anchor and would otherwise be
   // re-matched by a later MutationObserver pass.
   function isOwnButton(el) {
-    return !!el && (el.id === BTN_ID || el.hasAttribute("data-import-to-tenant-btn"));
+    return !!el && (el.id === BTN_ID || el.hasAttribute("data-bellhop-btn"));
   }
 
   // Strategy 1 — OBSERVED. The vendor renders the Download button with
@@ -280,7 +280,7 @@
       if (el) {
         if (!loggedAnchorStrategy) {
           loggedAnchorStrategy = true;
-          console.log("[import-to-tenant] anchor button found via strategy: %s", name);
+          console.log("[bellhop] anchor button found via strategy: %s", name);
         }
         return el;
       }
@@ -288,7 +288,7 @@
     if (!loggedAnchorMissing) {
       loggedAnchorMissing = true;
       console.log(
-        "[import-to-tenant] no anchor strategy matched the Download button; not injecting (fail closed)."
+        "[bellhop] no anchor strategy matched the Download button; not injecting (fail closed)."
       );
     }
     return null;
@@ -359,7 +359,7 @@
 
     var btn = document.createElement("button");
     btn.id = BTN_ID;
-    btn.setAttribute("data-import-to-tenant-btn", "true");
+    btn.setAttribute("data-bellhop-btn", "true");
     btn.className = downloadBtn.className;
     btn.style.marginLeft = "8px";
     btn.textContent = IMPORT_BTN_LABEL;
@@ -382,7 +382,7 @@
         } catch (err) {
           dialogOpen = false;
           console.log(
-            "[import-to-tenant] confirmation dialog failed to open: %s",
+            "[bellhop] confirmation dialog failed to open: %s",
             err && err.message ? err.message : String(err)
           );
         } finally {
@@ -448,7 +448,7 @@
       });
     } catch (err) {
       console.log(
-        "[import-to-tenant] permissions.contains check failed: %s",
+        "[bellhop] permissions.contains check failed: %s",
         err && err.message
       );
       return false;
@@ -489,7 +489,7 @@
       downloadError =
         err && err.message ? err.message : "could not get download url";
       console.log(
-        "[import-to-tenant] download url fetch failed at dialog open: %s",
+        "[bellhop] download url fetch failed at dialog open: %s",
         downloadError
       );
     }
@@ -728,11 +728,11 @@
         // retried, never fallen back from.
         if (chrome.runtime.lastError) {
           console.log(
-            "[import-to-tenant] permissions.request message failed: %s",
+            "[bellhop] permissions.request message failed: %s",
             chrome.runtime.lastError.message
           );
         } else if (response && response.error) {
-          console.log("[import-to-tenant] permissions.request refused: %s", response.error);
+          console.log("[bellhop] permissions.request refused: %s", response.error);
         }
 
         if (!response || !response.ok) {
@@ -775,7 +775,7 @@
       // that this label would truncate mid-sentence into nonsense. The raw
       // status and body stay in the console (and in the service worker log).
       console.log(
-        "[import-to-tenant] import failed: status=%s body=%s",
+        "[bellhop] import failed: status=%s body=%s",
         status,
         body
       );
@@ -803,7 +803,7 @@
 
     var uuid = getCurrentUuid();
     if (!uuid) {
-      console.log("[import-to-tenant] no uuid found in current url; skipping.");
+      console.log("[bellhop] no uuid found in current url; skipping.");
       return;
     }
 

@@ -1,4 +1,4 @@
-# Idira Recon Observer
+# Bellhop Recon Observer (diagnostic)
 
 Throwaway diagnostic tool, not part of the product. Not committed/maintained
 long-term - delete when done discovering the API.

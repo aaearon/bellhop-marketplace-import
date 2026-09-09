@@ -7,7 +7,7 @@
 Draft text for the Web Store Developer Dashboard's "Privacy practices" and "Permissions
 justification" fields. Each section below maps to one form field. Verified against
 `extension/manifest.json`, `extension/content.js`, `extension/background.js`, `src/*.ts` on
-`feat/import-to-tenant-spike`.
+`feat/bellhop-spike`.
 
 ---
 

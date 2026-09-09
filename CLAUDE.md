@@ -364,7 +364,7 @@ assumption. Observed markup:
    safety net, not enumerated per-language.
 
 Every strategy excludes the extension's own injected button
-(`id="import-to-tenant-btn"` / `data-import-to-tenant-btn`) so a later
+(`id="bellhop-btn"` / `data-bellhop-btn`) so a later
 MutationObserver pass can't re-anchor onto it. If no strategy matches,
 nothing is injected and the console says so clearly (fail closed — see
 Known limitations for the residual risk).
