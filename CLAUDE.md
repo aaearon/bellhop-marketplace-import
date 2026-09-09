@@ -498,6 +498,18 @@ tenant name, so adding a service would mean a new mapping plus a host, not a
 rewrite. Current scope remains exactly PSM connection components and
 CPM/SRS platforms, both on Privilege Cloud.
 
+## Icons
+
+`extension/icons/` holds the "Bellhop" mascot icon set: the full character
+(cap, torso, arms, parcel-in-hand) at 128px and 48px, and a reduced parcel
+mark (just the box) at 32px and 16px. This split is intentional, not
+inconsistency — the character silhouette doesn't survive below 48px, while
+the parcel stays legible and unambiguous at toolbar sizes where the
+character would reduce to a cap-shaped blob. `tools/make-icons.py`
+regenerates the entire set (icon16/32/48/128.png + preview.png) standalone
+from inline SVG source via ImageMagick `convert` + Pillow; run
+`python3 tools/make-icons.py` after any artwork change.
+
 ## Conventions
 
 - TypeScript `strict` for `src/` (compiled to `extension/lib/` for the
