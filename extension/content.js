@@ -590,9 +590,23 @@
     dialog.setAttribute("aria-modal", "true");
     dialog.setAttribute("aria-labelledby", titleId);
     dialog.style.cssText = [
+      // Two named custom properties, both from the Idira palette the icon
+      // set uses (sourced from the brand SVG at
+      // marketplace.idira.pan.dev/brand/idira-marketplace.svg).
+      //
+      // The chrome is charcoal, not blue, deliberately. The Import button
+      // below is #0b5fff, near-identical to Idira's own #265BFF, so a blue
+      // border and heading would wash this dialog into vendor blue and
+      // defeat the point of branding it as the extension's own UI.
+      // Charcoal is the one part of the palette the vendor UI does not use
+      // as chrome, so it reads as deliberate rather than as a mimic.
+      "--bellhop-accent:#141414",
+      // The mark stays Idira blue so it ties back to the toolbar icon.
+      "--bellhop-mark:#265bff",
       "background:#ffffff",
       "color:#1a1a1a",
       "border-radius:8px",
+      "border-top:4px solid var(--bellhop-accent)",
       "padding:24px",
       "max-width:420px",
       "width:90%",
@@ -600,6 +614,42 @@
       "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif",
       "box-sizing:border-box",
     ].join(";");
+
+    // Brand header: identifies this dialog as Bellhop's own UI, not the
+    // marketplace's, before the user reads anything else. Mark is an inline
+    // SVG (a simple parcel glyph, echoing the extension's icon set) rather
+    // than a chrome.runtime.getURL(...) reference to the packaged PNGs —
+    // that would need those icons declared under web_accessible_resources
+    // in manifest.json, which is out of scope for this change (another
+    // change is touching the manifest). The glyph deliberately mirrors the
+    // shipped 16/32px mark: a plain box with a white lid and NO ribbon.
+    // The ribbon was removed from the icon because at small sizes a
+    // high-contrast band across the box destroys the parcel silhouette —
+    // the same reasoning applies at this glyph's 18px, so the two must not
+    // drift apart. Fill reads var(--bellhop-mark).
+    var brandRow = document.createElement("div");
+    brandRow.style.cssText = "display:flex;align-items:center;gap:8px;margin:0 0 4px;";
+
+    var brandMark = document.createElement("span");
+    brandMark.setAttribute("aria-hidden", "true");
+    brandMark.style.cssText = "display:inline-flex;width:18px;height:18px;flex:0 0 18px;";
+    brandMark.innerHTML = [
+      '<svg width="18" height="18" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">',
+      '<rect x="3" y="9" width="18" height="12" rx="2" fill="var(--bellhop-mark)"/>',
+      '<path d="M3 9 L6 4 L21 4 L18 9 Z" fill="#ffffff" stroke="var(--bellhop-mark)" stroke-width="1.5" stroke-linejoin="round"/>',
+      "</svg>",
+    ].join("");
+
+    var brandName = document.createElement("span");
+    brandName.textContent = "Bellhop";
+    brandName.style.cssText = "font-size:14px;font-weight:700;color:var(--bellhop-accent);letter-spacing:0.02em;";
+
+    brandRow.appendChild(brandMark);
+    brandRow.appendChild(brandName);
+
+    var brandSubtitle = document.createElement("p");
+    brandSubtitle.style.cssText = "margin:0 0 16px;font-size:11px;color:#666;";
+    brandSubtitle.textContent = "Browser extension. Not part of Idira.";
 
     var title = document.createElement("h2");
     title.id = titleId;
@@ -687,6 +737,8 @@
     btnRow.appendChild(cancelBtn);
     btnRow.appendChild(importBtn);
 
+    dialog.appendChild(brandRow);
+    dialog.appendChild(brandSubtitle);
     dialog.appendChild(title);
     dialog.appendChild(productLine);
     dialog.appendChild(kindLine);
