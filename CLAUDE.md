@@ -369,6 +369,14 @@ MutationObserver pass can't re-anchor onto it. If no strategy matches,
 nothing is injected and the console says so clearly (fail closed — see
 Known limitations for the residual risk).
 
+The injected button itself is built by cloning the vendor's Download button
+(`downloadBtn.cloneNode(true)`) rather than a bare `<button>`, so PrimeReact's
+inner `.p-button-label` span structure (and its styling) is preserved; all
+label writes (loading/success/failure text) go through the inner span too,
+via a `setButtonLabel` helper, falling back to plain `textContent` on the
+button — with a console warning at construction time — if that span is ever
+missing.
+
 **Tooling note:** the `read_page`/`find` browser-automation tools could not
 reach into the product page's DOM at all in this session — it sits inside a
 doubly-nested cross-origin iframe

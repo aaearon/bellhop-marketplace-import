@@ -334,35 +334,94 @@
     document.head.appendChild(style);
   }
 
-  // Synchronous, called before any await in the click handler. Only adds a
-  // class / swaps textContent, so the classNames copied from the vendor's
-  // Download button (for visual consistency) are never overwritten.
+  // Centralized label mutation: the button's visible text lives inside
+  // PrimeReact's inner <span class="p-button-label">, not on the <button>
+  // itself (cloneNode preserves that structure — see makeImportButton).
+  // Writing textContent on the <button> directly would wipe that span and
+  // any sibling nodes (e.g. the loading spinner), so every place that
+  // changes the visible label goes through here instead.
+  function setButtonLabel(btn, text) {
+    var label = btn.querySelector(".p-button-label");
+    if (label) {
+      label.textContent = text;
+    } else {
+      btn.textContent = text;
+    }
+  }
+
+  // Synchronous, called before any await in the click handler. Inserts the
+  // spinner as a child positioned before the label span (rather than
+  // clearing/replacing the button's contents) so the PrimeReact structure
+  // copied from the vendor's Download button survives.
   function setButtonLoading(btn) {
     btn.disabled = true;
     btn.classList.add(BTN_LOADING_CLASS);
-    btn.textContent = "";
     var spinner = document.createElement("span");
     spinner.className = "idira-spinner";
     spinner.setAttribute("aria-hidden", "true");
-    btn.appendChild(spinner);
-    btn.appendChild(document.createTextNode("Preparing…"));
+    var label = btn.querySelector(".p-button-label");
+    if (label) {
+      btn.insertBefore(spinner, label);
+    } else {
+      btn.appendChild(spinner);
+    }
+    setButtonLabel(btn, "Preparing…");
   }
 
   function clearButtonLoading(btn) {
     btn.disabled = false;
     btn.classList.remove(BTN_LOADING_CLASS);
-    btn.textContent = IMPORT_BTN_LABEL;
+    var spinner = btn.querySelector(".idira-spinner");
+    if (spinner && spinner.parentNode) {
+      spinner.parentNode.removeChild(spinner);
+    }
+    setButtonLabel(btn, IMPORT_BTN_LABEL);
   }
 
   function makeImportButton(downloadBtn, uuid, classification) {
     ensureSpinnerStyles();
 
-    var btn = document.createElement("button");
+    // downloadBtn is only ever the vendor's genuine Download button here:
+    // every findAnchorButton() strategy excludes isOwnButton() results, so
+    // this never clones our own previously-injected button.
+    var btn = downloadBtn.cloneNode(true);
+    btn.removeAttribute("id");
+    btn.removeAttribute("data-testid");
+    btn.removeAttribute("name");
+    // cloneNode never copies JS listeners, but strip any inline
+    // onclick-style attribute defensively anyway.
+    btn.removeAttribute("onclick");
     btn.id = BTN_ID;
     btn.setAttribute("data-bellhop-btn", "true");
-    btn.className = downloadBtn.className;
+    btn.setAttribute("aria-label", IMPORT_BTN_LABEL);
     btn.style.marginLeft = "8px";
-    btn.textContent = IMPORT_BTN_LABEL;
+
+    // Outlined variant: the clone inherits PrimeReact's exact typography,
+    // padding and sizing, and this modifier changes only the fill. Download is
+    // the vendor's primary action on this page, so ours sits beside it as the
+    // secondary action rather than competing as a second filled button.
+    btn.classList.add("p-button-outlined");
+
+    // A download glyph is wrong for an import action; PrimeReact renders
+    // label-only buttons fine without it.
+    var icon = btn.querySelector(".p-button-icon");
+    if (icon && icon.parentNode) {
+      icon.parentNode.removeChild(icon);
+    }
+
+    // Never set textContent on the <button> itself here — write into the
+    // inner .p-button-label span so PrimeReact's structure (and styling)
+    // survives. Fall back to plain textContent, loudly, if the vendor
+    // markup ever stops having that span so the breakage is diagnosable.
+    var label = btn.querySelector(".p-button-label");
+    if (label) {
+      label.textContent = IMPORT_BTN_LABEL;
+    } else {
+      console.warn(
+        "[bellhop] cloned Download button had no .p-button-label span; falling back to plain textContent on the button."
+      );
+      btn.textContent = IMPORT_BTN_LABEL;
+    }
 
     btn.addEventListener("click", function () {
       // Re-entrancy guard: a click while already loading (or otherwise
@@ -707,7 +766,7 @@
   // .then() hop before the message would not be.
   function handleImportClick(btn, uuidAtClickTime, classification, plan) {
     btn.disabled = true;
-    btn.textContent = "Importing…";
+    setButtonLabel(btn, "Importing…");
 
     // Resolved at dialog-open time, so no await is needed here.
     if (plan.alreadyGranted) {
@@ -736,7 +795,7 @@
         }
 
         if (!response || !response.ok) {
-          btn.textContent = "Failed: permission not granted";
+          setButtonLabel(btn, "Failed: permission not granted");
           return;
         }
 
@@ -760,12 +819,12 @@
         kind: kind,
       });
     } catch (err) {
-      btn.textContent = "Failed: " + (err && err.message ? err.message : "message failed");
+      setButtonLabel(btn, "Failed: " + (err && err.message ? err.message : "message failed"));
       return;
     }
 
     if (response && response.ok) {
-      btn.textContent = "Imported ✓";
+      setButtonLabel(btn, "Imported ✓");
     } else {
       var status = response && response.status;
       var body = response && response.body;
@@ -785,13 +844,13 @@
       // rather than "Failed: Already imported...", which contradicts itself.
       // The absence of the success tick still distinguishes it visually.
       if (status === 409) {
-        btn.textContent = "Already imported into this tenant";
+        setButtonLabel(btn, "Already imported into this tenant");
       } else {
         var reason = status ? "HTTP " + status : "unknown error";
         if (body) {
           reason += " - " + String(body).slice(0, 120);
         }
-        btn.textContent = "Failed: " + reason;
+        setButtonLabel(btn, "Failed: " + reason);
       }
     }
   }
