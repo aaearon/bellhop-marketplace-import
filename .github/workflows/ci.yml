@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.12.0"
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      # The build has previously "succeeded" while silently dropping a src/
+      # file from extension/lib/ (src/csrf.ts was omitted with no compile
+      # error until it 404'd as a runtime module-not-found in the service
+      # worker). This step re-derives the expected .js output for every
+      # .ts file under src/ and fails loudly if any are missing.
+      - name: Verify extension/lib/ contains every compiled module
+        run: |
+          missing=0
+          for f in src/*.ts; do
+            expected="extension/lib/$(basename "${f%.ts}").js"
+            if [ ! -f "$expected" ]; then
+              echo "::error::missing compiled output for $f -> $expected not found"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "Build silently omitted one or more src/ files from extension/lib/ (the csrf.ts bug)." >&2
+            exit 1
+          fi
