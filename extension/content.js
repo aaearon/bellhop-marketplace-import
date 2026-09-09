@@ -92,14 +92,15 @@
   // plain content script with no ESM imports, so it delegates to the
   // service worker via messaging instead of duplicating the logic here. The
   // service worker also derives the destination tenant (via deriveOrigins)
-  // from the origin we send it, so this script doesn't have to duplicate
-  // hostname parsing to show it in the confirmation dialog.
+  // from sender.origin — the origin of THIS frame, as Chrome reports it, not
+  // an origin this script asserts — so the dialog can name the tenant without
+  // this script duplicating hostname parsing, and without the destination
+  // being something a compromised content script could choose.
   async function classifyViaBackground(detail) {
     try {
       return await chrome.runtime.sendMessage({
         type: "classify",
         detail: detail,
-        origin: location.origin,
       });
     } catch (err) {
       console.log(
@@ -538,11 +539,72 @@
     return btn;
   }
 
+  // --- csrf token ----------------------------------------------------------
+  // The tenant's double-submit CSRF cookie, XSRF-TOKEN-<guid>, is NOT HttpOnly
+  // and is scoped to the shared .cyberark.cloud parent domain (one SSO session
+  // spans shell, marketplace and pcloud), so this frame can read it straight
+  // out of document.cookie — no host permission, no `cookies` permission, no
+  // chrome.cookies call. If the vendor ever marks it HttpOnly or narrows it to
+  // a host-only cookie on the pcloud host, this returns nothing and the import
+  // fails closed with a clear message; there is no fallback.
+  //
+  // The name filter here is a DELIBERATE minimal duplication of one detail of
+  // src/csrf.ts, and only that: document.cookie is all-or-nothing, so without
+  // it every unrelated cookie VALUE on this origin (the SSO session token
+  // included) would cross the message boundary into the worker for no reason.
+  // It is deliberately LOOSER than csrf.ts's `XSRF-TOKEN-<guid>` pattern — a
+  // bare prefix test — so the two cannot drift in the direction that silently
+  // drops a real token. Which candidate wins, and what happens when more than
+  // one does, stays in findXsrfCookie (unit-tested) in the worker, exactly as
+  // classification stays in classifyProduct rather than being reimplemented
+  // here.
+  //
+  // Values are returned to the caller and sent on the import message. They are
+  // never logged and never rendered: this runs inside a live platform tenant's
+  // session, and a cookie value must not reach a console or the UI.
+  function readXsrfCookies() {
+    var out = [];
+    // Keyed by name+value. Holds a cookie value in memory only, exactly as
+    // `out` does; it is never logged, rendered or sent anywhere.
+    var seen = Object.create(null);
+    var pairs = document.cookie ? document.cookie.split("; ") : [];
+    for (var i = 0; i < pairs.length; i++) {
+      var eq = pairs[i].indexOf("=");
+      if (eq <= 0) continue;
+      var name = pairs[i].slice(0, eq);
+      if (name.indexOf("XSRF-TOKEN-") !== 0) continue;
+      // Not decoded: chrome.cookies returned the stored value verbatim and the
+      // server expects that same string echoed back, so decodeURIComponent
+      // here would corrupt any token containing a percent sequence.
+      var value = pairs[i].slice(eq + 1);
+      // An empty value is not a token. Passing it on would satisfy
+      // findXsrfCookie (a truthy object), send an empty X-XSRF-TOKEN and turn
+      // a clear "no usable XSRF-TOKEN cookie" into an opaque
+      // "HTTP 400 - CSRF validation failed".
+      if (value === "") continue;
+      // The same cookie can legitimately appear twice in document.cookie: an
+      // SPA that shadows the parent-domain SSO cookie with a host-only one of
+      // the same name gets both, and document.cookie exposes no domain field
+      // to tell them apart. Identical name+value means one token seen twice,
+      // so collapse it — otherwise findXsrfCookie sees two candidates and
+      // fails closed permanently on what is really no ambiguity at all.
+      // Deduping on name+value and not on name alone is the point: two
+      // DIFFERENT tokens under one name may belong to different tenants, and
+      // that ambiguity must still fail closed.
+      var key = name + "=" + value;
+      if (seen[key]) continue;
+      seen[key] = true;
+      out.push({ name: name, value: value });
+    }
+    return out;
+  }
+
   // --- optional host permissions -------------------------------------------
-  // The extension ships with NO host permissions. The service worker's
-  // cross-origin fetches (S3 artifact, import POST) and chrome.cookies both
-  // need them, so the exact origins for THIS tenant are requested on the
-  // dialog's Import click and granted per tenant.
+  // The extension ships with NO host permissions and no API permissions at
+  // all. The service worker's two cross-origin fetches (the S3 artifact, the
+  // import POST) are the only things that need host access, so the exact two
+  // origins for THIS tenant are requested on the dialog's Import click and
+  // granted per tenant.
   //
   // chrome.permissions is a "privileged_extension"-context API, so it is
   // undefined here in the content script — both calls are made by the service
@@ -552,37 +614,29 @@
   // but only for the synchronous portion of the click: see the comment on
   // handleImportClick.
   //
-  // The artifact (S3) origin is deliberately NOT listed here. The vendor bucket
-  // is a Jenkins-generated name that changes without notice, so the service
-  // worker derives that origin itself from the download url it is about to
-  // fetch — this script never names or asserts it.
+  // This script names NEITHER of the two requested origins. The worker builds
+  // the tenant's pcloud pattern from sender.origin — the origin of the frame
+  // the message actually came from, which it can verify — rather than from
+  // anything this script asserts, and it derives the artifact (S3) origin from
+  // the download url it is itself about to fetch. So the only thing passed
+  // below is the download url; everything else the worker works out for
+  // itself, from values it trusts.
   //
-  // The bare apex, and only the bare apex. The tenant's XSRF-TOKEN-<guid> is a
-  // parent-domain (.cyberark.cloud) SSO cookie, and chrome.cookies gates read
-  // access on the cookie's own domain scope rather than the url passed to
-  // getAll() — so without this grant the token is unreadable even with the
-  // exact pcloud origin granted. It confers nothing on any tenant subdomain.
-  var APEX_ORIGIN_PATTERN = "https://cyberark.cloud/*";
-
-  function requiredOriginPatterns(classification) {
-    var patterns = [];
-    if (classification && typeof classification.pcloudOrigin === "string" && classification.pcloudOrigin) {
-      patterns.push(classification.pcloudOrigin.replace(/\/+$/, "") + "/*");
-    }
-    patterns.push(APEX_ORIGIN_PATTERN);
-    return patterns;
-  }
+  // There is no third origin any more. The bare cyberark.cloud apex used to be
+  // requested so chrome.cookies could read the parent-domain-scoped
+  // XSRF-TOKEN cookie; that cookie is not HttpOnly, so this script reads it
+  // from document.cookie instead (see readXsrfCookies) and neither the apex
+  // grant nor the `cookies` permission exists any more.
 
   // Fails closed to false on any error: a false here only costs one extra
   // native prompt, never a silent import without permission. downloadUrl is
-  // passed so the worker derives and appends the artifact origin itself —
-  // the set checked must be exactly the set that would later be requested.
-  async function alreadyGranted(origins, downloadUrl) {
+  // passed so the worker derives the artifact origin itself — the set checked
+  // must be exactly the set that would later be requested.
+  async function alreadyGranted(downloadUrl) {
     var result;
     try {
       result = await chrome.runtime.sendMessage({
         type: "permissionsContains",
-        origins: origins,
         downloadUrl: downloadUrl,
       });
     } catch (err) {
@@ -636,13 +690,9 @@
     // contains() needs no user gesture, so it is asked here rather than on the
     // click; a repeat import into an already-granted tenant then skips the
     // native prompt entirely.
-    var originPatterns = requiredOriginPatterns(classification);
     var plan = {
       downloadUrl: downloadUrl,
-      originPatterns: originPatterns,
-      alreadyGranted: downloadUrl
-        ? await alreadyGranted(originPatterns, downloadUrl)
-        : false,
+      alreadyGranted: downloadUrl ? await alreadyGranted(downloadUrl) : false,
     };
 
     var kindLabel = KIND_LABELS[classification.kind] || classification.kind;
@@ -917,9 +967,9 @@
     chrome.runtime.sendMessage(
       {
         type: "permissionsRequest",
-        origins: plan.originPatterns,
-        // The worker derives and validates the artifact origin from this url
-        // itself; it does not take an origin on our word.
+        // The only field the worker cannot work out for itself. It derives and
+        // validates the artifact origin from this url, and the tenant's pcloud
+        // origin from sender.origin; it takes no origin on our word.
         downloadUrl: plan.downloadUrl,
       },
       function (response) {
@@ -955,8 +1005,10 @@
       response = await chrome.runtime.sendMessage({
         type: "import",
         downloadUrl: plan.downloadUrl,
-        origin: location.origin,
         kind: kind,
+        // Read here, immediately before the message, so the token is as fresh
+        // as it can be. Never logged and never rendered — see readXsrfCookies.
+        xsrfCookies: readXsrfCookies(),
       });
     } catch (err) {
       setButtonLabel(btn, "Failed: " + (err && err.message ? err.message : "message failed"));

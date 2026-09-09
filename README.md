@@ -10,7 +10,7 @@ Idira is Palo Alto Networks' rebrand of CyberArk. Marketplace and Privilege Clou
 
 ## How it works
 
-A content script in the marketplace iframe fetches the product's presigned S3 download URL on the same origin, using cookies it already has. The artifact fetch and the import POST happen in the service worker rather than the content script, because a content script isn't CORS-exempt but an MV3 service worker holding a host permission for the target is. The worker requests exactly the three origins an import needs — the tenant's Privilege Cloud host, the bare `cyberark.cloud` apex (for the parent-domain CSRF cookie), and the artifact's S3 host, derived at runtime from the download URL and never hardcoded — and nothing else. Full permission and origin-derivation model: `CLAUDE.md`.
+A content script in the marketplace iframe fetches the product's presigned S3 download URL on the same origin, using cookies it already has, and reads the tenant's CSRF token from `document.cookie` — it isn't HttpOnly, so this needs no permission at all. The artifact fetch and the import POST happen in the service worker rather than the content script, because a content script isn't CORS-exempt but an MV3 service worker holding a host permission for the target is. The extension declares no API permissions, and the worker requests exactly the two origins an import needs — the tenant's Privilege Cloud host, derived from the origin of the frame that sent the message, and the artifact's S3 host, derived at runtime from the download URL and never hardcoded. Full permission and origin-derivation model: `CLAUDE.md`.
 
 ## Screenshots
 
@@ -35,13 +35,13 @@ Then `chrome://extensions` (or `edge://extensions`) → enable Developer mode �
 
 Confirmed:
 
-- End-to-end import of one connection-component product into one live tenant, as a super admin — confirmation dialog, per-tenant optional permission grant, and CSRF handling all exercised.
+- End-to-end import of one connection-component product into one live tenant, as a super admin — confirmation dialog, per-tenant optional permission grant, and CSRF handling all exercised. That run predates the current permission and CSRF shape, which has not yet been re-tested against a live tenant.
 
 Untested:
 
 - The platform (CPM/SRS) import path — implemented, never run against a live tenant.
 - Any user below super admin.
-- Two tenants authenticated at once (the CSRF cookie scope-ranking exists specifically for this case).
+- Two tenants authenticated at once. More than one CSRF token candidate fails closed rather than guessing.
 - An artifact large enough to risk the service worker's ~30s idle lifetime; only a 308 KB artifact has been tried.
 
 Full list, with risk for each: `RELEASE-BLOCKERS.md`.

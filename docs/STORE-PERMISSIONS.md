@@ -25,63 +25,54 @@ justification" fields. Each section below maps to one form field. Verified again
 
 ## Permission justifications
 
-### `cookies`
+### API permissions
 
-**What it enables:** Reading the single `XSRF-TOKEN-<id>` cookie that the tenant sets for
-double-submit CSRF protection, so its value can be echoed back as a request header on the import
-POST. This is required — the tenant's Privilege Cloud import API rejects requests without it
-(confirmed: the first import attempt without a CSRF header returned `HTTP 400 - CSRF validation
-failed`, not an auth error, i.e. the session cookie itself was already accepted).
+**None.** `extension/manifest.json` has no `"permissions"` key at all. The extension declares zero
+API permissions and requests none at runtime.
 
-**Why there is no lesser alternative:** `chrome.cookies` is the only extension API that can read
-a cookie value at all. The alternative — injecting a script into the tenant's own Privilege Cloud UI
-to read the token from the page instead — was considered and rejected: it would require a host
-permission on a live Privilege Cloud UI and running code inside it, a larger and riskier surface
-than reading one named cookie. There is no scope narrower than `cookies` in the Chrome permissions
-model.
+This includes `cookies`, which an earlier version did declare. The tenant's double-submit CSRF
+cookie, `XSRF-TOKEN-<id>`, is not marked `HttpOnly` and is scoped to the shared `.cyberark.cloud`
+parent domain, so the content script already running in the marketplace page reads it from
+`document.cookie` — the same way the marketplace's own page JavaScript can. That needs no
+extension permission of any kind, so the `cookies` permission was removed rather than kept for
+convenience. Echoing that token back as the `X-XSRF-TOKEN` header is required: the tenant's
+Privilege Cloud import API rejects requests without it (confirmed — an import attempt without a
+CSRF header returns `HTTP 400 - CSRF validation failed`, not an auth error, i.e. the session
+cookie itself was already accepted).
 
-**What it is not used for:** No cookie *value* other than the one CSRF token's is ever read or
-used. `chrome.cookies.getAll()` has no name filter, so it necessarily returns every cookie visible
-at the granted origin's scope, not only the XSRF one — those other cookies do pass through
-extension memory during that one call. The code inspects only their *names*, filtering for the
-`XSRF-TOKEN-<guid>` pattern, and only the matched cookie's *value* is ever used or transmitted
-further; every other cookie in that result is discarded immediately and never used. Diagnostic
-logging (used only on failure, to distinguish "cookie unreadable at this permission scope" from
-"cookie readable but no candidate matched") reports, precisely: the *domains* of every cookie
-returned by that call (`cookieDomains`, unfiltered by name — this can include the domain, but
-never the name or value, of an unrelated cookie such as a session cookie present at the same
-scope), and the *names* of only the candidates shaped like `XSRF-TOKEN-<guid>`
-(`xsrfCandidateNames`). No cookie value is ever logged, anywhere, for any cookie
-(`src/csrf.ts`, `extension/background.js`). No cookie is ever written, and — because
-`chrome.cookies` access is itself gated by the host permission described below — the extension
-has no cookie reach at all until a specific tenant has been granted.
+**What is read, and what is not:** `document.cookie` returns the cookies for the page's own
+origin. The content script splits that string and keeps only entries whose *name* begins
+`XSRF-TOKEN-`; every other cookie's value is discarded on the spot and never leaves the content
+script. Only the matched candidates are passed to the service worker, which selects the one
+matching `XSRF-TOKEN-<guid>` (`findXsrfCookie`, `src/csrf.ts`) and fails closed if none matches or
+if more than one does. Diagnostic logging, used only on failure, reports how many candidates were
+found and their *names* (`xsrfCandidateNames`). No cookie value is ever logged, anywhere, for any
+cookie. No cookie is ever written.
 
 ### Host permissions
 
 **Declared, not granted at install.** `extension/manifest.json` lists every host pattern the
 extension may ever ask for under `optional_host_permissions` — never under `host_permissions`.
-On installation the extension holds **zero** host access. The three declared patterns are:
+On installation the extension holds **zero** host access. The two declared patterns are:
 
 - `https://*.cyberark.cloud/*`
-- `https://cyberark.cloud/*`
 - `https://*.amazonaws.com/*`
 
 **What is actually requested, at runtime, on the user's Import click** is never one of those
-wildcards. It is exactly three specific origins, computed per import and validated against an
+wildcards. It is exactly two specific origins, computed per import and validated against an
 allowlist that rejects wildcard forms (`isAllowedOriginPattern`, `src/origins.ts`):
 
 1. **The one tenant's Privilege Cloud host** — `https://<tenant>-pcloud.cyberark.cloud/*` — to
-   POST the artifact to the tenant the user is currently viewing and confirmed in the dialog.
-2. **The bare apex** — `https://cyberark.cloud/*`, an exact string, not a subdomain wildcard —
-   needed only because the CSRF cookie above is scoped to `.cyberark.cloud`, and
-   `chrome.cookies` gates read access on the cookie's own domain scope, not on the URL passed to
-   it. Without this exact grant the token is unreadable even with the tenant's own pcloud origin
-   granted. It confers no access to any tenant subdomain by itself.
-3. **The specific artifact host** — derived at runtime from the presigned download URL the
+   POST the artifact to the tenant the user is currently viewing and confirmed in the dialog. The
+   service worker derives this from the origin of the frame that sent it the message, as Chrome
+   reports it, so the destination cannot be anything other than the tenant the user is on and the
+   dialog named.
+2. **The specific artifact host** — derived at runtime from the presigned download URL the
    marketplace itself issues (an AWS-hosted content origin whose exact hostname is not fixed and
    is never hardcoded), so the artifact bytes can be fetched. This origin is derived by the
    extension from a URL the user's own marketplace session returned, not supplied by any other
-   party.
+   party. It is additionally required to be an S3 endpoint host, so a manipulated download URL
+   cannot win a grant for some other AWS-hosted service.
 
 **Why there is no lesser alternative:** The tenant hostname is not known until the user is on that
 tenant's page, so `optional_host_permissions` must declare a pattern, not a fixed origin — Chrome
@@ -112,9 +103,11 @@ given tenant's name is. The script narrows itself in code, in its own first line
 `location.hostname` against a regex for the `<tenant>-marketplace.cyberark.cloud` shape and
 returns immediately, doing nothing at all, everywhere else — including the shell, the PasswordVault
 UI, and any other `*.cyberark.cloud` subdomain. A content script match is not a host permission by
-itself and grants no `chrome.cookies` or cross-origin `fetch` access; the same-origin fetches this
-script performs (`/api/integrations/...`, `/api/downloads/integrations/...`) run only on the one
-frame that passes that check, using the page's own existing session.
+itself and grants no cross-origin `fetch` access and no extension-level cookie access; the
+same-origin fetches this script performs (`/api/integrations/...`,
+`/api/downloads/integrations/...`) and its `document.cookie` read run only on the one frame that
+passes that check, using the page's own existing session, with exactly the reach the page itself
+already has.
 
 **Why there is no lesser alternative for `all_frames`:** The Idira marketplace product page the
 button is injected into is not the top-level document — the tenant UI is a shell page that loads
@@ -147,7 +140,7 @@ and forwarded as opaque data, never parsed or executed.
 | Personally identifiable information | No | — |
 | Health information | No | — |
 | Financial and payment information | No | — |
-| Authentication information | **Read, not collected** | The extension reads one CSRF cookie value and echoes it, in-request, as a header on a request to the same tenant it came from. The value is never transmitted to any other destination, never written to storage or disk, and never logged — logs record only that cookie's name and domain on success, or (on failure to find it) the domains of whatever cookies were visible at that scope plus the names of any XSRF-shaped candidates, still no value, ever, for any cookie. Never retained after the request completes. It is not "collected" in the sense of being gathered, stored, or reused — it is read once per import and used once, immediately, for the single request that needs it. |
+| Authentication information | **Read, not collected** | The extension reads one CSRF cookie value from `document.cookie` on the marketplace page and echoes it, in-request, as the `X-XSRF-TOKEN` header on a request to the same tenant it came from. The value is never transmitted to any other destination, never written to storage or disk, and never logged — logs record only that cookie's name on success, or (on failure to find it) the names of any XSRF-shaped candidates, still no value, ever, for any cookie. Never retained after the request completes. It is not "collected" in the sense of being gathered, stored, or reused — it is read once per import and used once, immediately, for the single request that needs it. |
 | Personal communications | No | — |
 | Location | No | — |
 | Web history | No | — |
@@ -181,8 +174,8 @@ sufficient and why no standing access is needed, and it was built with that in m
 - **Permissions are optional and per-tenant, not standing.** The extension's whole reach is scoped
   to services of the one tenant the user is currently signed into — never a standing grant across
   tenants, and never access to any other vendor's product. The extension installs with no host
-  access and no cookie reach at all (`optional_host_permissions`, not `host_permissions`, in
-  `extension/manifest.json`). Each tenant must be individually approved via a native Chrome
+  access at all, and declares no API permissions (`optional_host_permissions`, not
+  `host_permissions`, and no `permissions` key, in `extension/manifest.json`). Each tenant must be individually approved via a native Chrome
   permission prompt before the extension can act on it, and each grant is independently visible
   and revocable under **Site access** in `chrome://extensions`.
 - **Every claim above is checkable directly in source:**
@@ -191,10 +184,11 @@ sufficient and why no standing access is needed, and it was built with that in m
   - Narrow, validated runtime requests: `originsToRequest` / `isAllowedOriginPattern` in
     `extension/background.js` and `src/origins.ts` — a wildcard pattern is refused before
     `chrome.permissions.request()` is ever called.
-  - CSRF cookie handling: `src/csrf.ts` (`findXsrfCookie`, `cookieDomains`,
-    `xsrfCandidateNames`) and its call site in `extension/background.js` — note no cookie value
-    is ever logged, for any cookie; only the selected cookie's name/domain on success, or
-    unfiltered cookie domains plus XSRF-shaped names on failure.
+  - CSRF cookie handling: `readXsrfCookies` in `extension/content.js`, and `findXsrfCookie` /
+    `xsrfCandidateNames` in `src/csrf.ts` with their call site in `extension/background.js` —
+    note no cookie value is ever logged, for any cookie; only the selected cookie's name on
+    success, or the XSRF-shaped candidate names on failure. There is no `chrome.cookies` call
+    anywhere in the extension.
   - No storage of any kind: no calls to `chrome.storage`, `localStorage`, `sessionStorage`, or
     IndexedDB anywhere in `extension/` or `src/`.
   - No remote code: all files are local to the package; `extension/lib/*.js` is compiled from
