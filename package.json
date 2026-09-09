@@ -28,6 +28,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "check:version": "node tools/check-version.mjs",
+    "check:tag": "node tools/check-tag.mjs",
     "package": "node tools/package.mjs"
   },
   "devDependencies": {
