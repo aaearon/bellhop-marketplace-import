@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Bellhop",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Import marketplace integrations into Privilege Cloud without downloading and re-uploading them.",
   "icons": {
     "16": "icons/icon16.png",
