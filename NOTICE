@@ -1,0 +1,19 @@
+Bellhop
+Copyright 2026 Tim Schindler
+
+This product includes software developed by Tim Schindler.
+
+Bellhop is an independent, unofficial and unsupported project. It is not
+affiliated with, endorsed by, sponsored by, or connected to Palo Alto
+Networks, Inc. or CyberArk Software Ltd.
+
+"Idira", "CyberArk", "Privilege Cloud", "Palo Alto Networks" and all
+related names and marks are the property of their respective owners.
+They are used here descriptively, only to identify the products this
+software interoperates with.
+
+This software writes to a production Privilege Cloud tenant. It is
+spike-quality and has been verified against a single tenant, a single
+product and a single privilege level. Use it at your own risk. See
+README.md and RELEASE-BLOCKERS.md before running it against anything
+you care about.
