@@ -4,6 +4,13 @@
 (function () {
   "use strict";
 
+  // Chrome match patterns cannot express a partial subdomain wildcard
+  // ("*-marketplace.cyberark.cloud" is rejected as an invalid host wildcard),
+  // so the manifest matches all of *.cyberark.cloud and we narrow here.
+  if (!/(^|\.)[a-z0-9-]+-marketplace\.cyberark\.cloud$/i.test(location.hostname)) {
+    return;
+  }
+
   var BTN_ID = "import-to-tenant-btn";
   var loggedProductDetail = false;
   var loggedDownloadResponse = false;

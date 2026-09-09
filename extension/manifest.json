@@ -5,10 +5,14 @@
   "description": "Import a marketplace connection component into the current tenant.",
   "content_scripts": [
     {
-      "matches": ["https://*-marketplace.cyberark.cloud/*"],
+      "matches": [
+        "https://*.cyberark.cloud/*"
+      ],
       "all_frames": true,
       "run_at": "document_idle",
-      "js": ["content.js"]
+      "js": [
+        "content.js"
+      ]
     }
   ],
   "background": {
