@@ -1,4 +1,7 @@
-# Idira Marketplace Importer
+# Idira Integration Importer
+
+> Import integrations from the Idira Marketplace directly into your tenant. Not affiliated with
+> or endorsed by Palo Alto Networks or CyberArk.
 
 Adds an "Import to tenant" button next to Download on marketplace
 connection-component product pages; the background service worker

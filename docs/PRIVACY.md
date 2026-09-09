@@ -1,18 +1,25 @@
-# Privacy Policy — Idira Marketplace Importer
+# Privacy Policy — Idira Integration Importer
+
+> Import integrations from the Idira Marketplace directly into your tenant. Not affiliated with
+> or endorsed by Palo Alto Networks or CyberArk.
 
 > **DRAFT — NOT LEGAL ADVICE.** This is an unreviewed engineering draft, written from the
 > extension's source code, not a legal document. It must be reviewed and approved by the
 > publisher's legal counsel before it is published or submitted anywhere. Two points counsel
-> should weigh specifically: (1) the extension's name, "Idira Marketplace Importer," uses a
+> should weigh specifically: (1) the extension's name, "Idira Integration Importer," uses a
 > third-party trademark ("Idira," Palo Alto Networks' rebrand of CyberArk), and (2) the
 > integration it performs is not sanctioned by that vendor. Neither issue is addressed below;
 > both are legal questions, not engineering ones.
+>
+> A privacy policy is good practice for a self-distributed security-adjacent tool even without a
+> store requirement, so this document stays useful regardless of which distribution route
+> (Chrome Web Store or GitHub/self-hosted) is chosen.
 
 **Effective date:** [PLACEHOLDER: effective date]
 
 ## What this extension does
 
-Idira Marketplace Importer adds an "Import to tenant" button to a product page on the Idira
+Idira Integration Importer adds an "Import to tenant" button to a product page on the Idira
 marketplace. When clicked, it shows a confirmation dialog naming the destination tenant, then
 downloads the selected integration artifact and uploads it directly into that same tenant's
 Privilege Cloud, using the import API. It replaces the manual step of downloading the artifact
@@ -82,7 +89,7 @@ or to every customer tenant at once.
 Because access is granted per tenant, you can review and remove it at any time:
 
 1. Go to `chrome://extensions`.
-2. Find "Idira Marketplace Importer" and open **Details**.
+2. Find "Idira Integration Importer" and open **Details**.
 3. Under **Site access**, review the sites listed and remove any you no longer want the
    extension to access.
 

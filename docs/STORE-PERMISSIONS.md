@@ -1,4 +1,8 @@
-# Chrome Web Store Submission — Idira Marketplace Importer
+# Chrome Web Store Submission — Idira Integration Importer
+
+> **Applies only if pursuing a Chrome Web Store submission** (listed or unlisted). If distribution
+> goes the GitHub/self-hosted route instead, this document can be ignored entirely — see
+> "Distribution method undecided" in `RELEASE-BLOCKERS.md`.
 
 Draft text for the Web Store Developer Dashboard's "Privacy practices" and "Permissions
 justification" fields. Each section below maps to one form field. Verified against
@@ -9,7 +13,7 @@ justification" fields. Each section below maps to one form field. Verified again
 
 ## Single purpose description
 
-> Idira Marketplace Importer lets an administrator, on an Idira (CyberArk) marketplace product
+> Idira Integration Importer lets an administrator, on an Idira (CyberArk) marketplace product
 > page, import a connection component or platform artifact directly into the same tenant's
 > Privilege Cloud, replacing the manual download-then-upload workflow. It has no other function.
 

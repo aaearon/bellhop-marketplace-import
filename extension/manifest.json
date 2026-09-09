@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Idira Marketplace Importer",
+  "name": "Idira Integration Importer",
   "version": "0.1.0",
-  "description": "Import a marketplace connection component or platform into the current Idira tenant.",
+  "description": "Import integrations from the Idira Marketplace directly into your tenant.",
   "permissions": [
     "cookies"
   ],

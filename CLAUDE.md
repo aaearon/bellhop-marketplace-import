@@ -2,7 +2,7 @@
 
 ## What this is
 
-Idira Marketplace Importer is a Chrome MV3 extension spike: it adds an
+Idira Integration Importer is a Chrome MV3 extension spike: it adds an
 "Import to tenant" button beside the "Download" button on Idira marketplace
 product pages. Instead of downloading the artifact zip and hand-uploading
 it, the button imports it directly into the same tenant's Privilege Cloud.
