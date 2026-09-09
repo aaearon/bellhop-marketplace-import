@@ -75,19 +75,15 @@
   // href and log what we find so it can be corrected later if wrong.
   var UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 
-  function getCurrentUuid() {
+  // Deliberately SILENT, unlike every other read in this file. tryInject()
+  // calls this on every debounced MutationObserver pass just to check that the
+  // injected button still targets the product on screen, and the
+  // overwhelmingly common answer is "it does" — logging that would bury every
+  // other message in the console. The callers that actually act on the value
+  // log it there instead (see tryInject).
+  function readCurrentUuid() {
     var match = location.href.match(UUID_RE);
-    var uuid = match ? match[0] : null;
-    // Redacted through safeUrlForLog: this frame is handed to us by the
-    // tenant's SSO shell, so its url's query/fragment can carry session
-    // handoff params. The uuid — the only part actually needed here — is
-    // logged separately below.
-    console.log(
-      "[bellhop] getCurrentUuid: url=%s -> uuid=%s",
-      safeUrlForLog(location.href),
-      uuid
-    );
-    return uuid;
+    return match ? match[0] : null;
   }
 
   // --- product detail / classification -----------------------------------
@@ -445,6 +441,14 @@
     btn.id = BTN_ID;
     btn.setAttribute("data-bellhop-btn", "true");
     btn.setAttribute("aria-label", idleLabel);
+    // The product this button was built for, recorded ON the element. The click
+    // handler below captures `uuid` and `classification` by closure, so a
+    // button that outlives the product it was built for is a button that
+    // imports the wrong artifact — and nothing in the DOM would say so. This
+    // stamp is what lets tryInject() tell "the button on screen belongs to the
+    // product on screen" from "the SPA changed product underneath it"; see the
+    // identity check there for the full failure mode.
+    btn.dataset.bellhopUuid = uuid;
     // Stashed here, not threaded as a parameter: clearButtonLoading only has
     // the <button> in scope (no classification), so it reads the idle label
     // back from the element rather than duplicating this computation.
@@ -482,6 +486,27 @@
       // Re-entrancy guard: a click while already loading (or otherwise
       // disabled) must not fire a second fetch or open a second dialog.
       if (btn.disabled) return;
+
+      // Identity guard, the click-time half of the check in tryInject().
+      // tryInject() removes and rebuilds this button when the SPA changes
+      // product, but it only runs on a 300ms-debounced MutationObserver pass;
+      // a click landing between an in-place route change and that pass would
+      // otherwise start an import of the PREVIOUS product's artifact into a
+      // live tenant while the page already shows the new one. Synchronous and
+      // essentially free, and the failure it prevents (a wrong write into a
+      // production tenant) cannot be undone. Removing itself here rather than
+      // just returning keeps the two paths agreeing on what a stale button is.
+      var uuidNow = readCurrentUuid();
+      if (uuidNow !== uuid) {
+        console.log(
+          "[bellhop] ignoring click: this button was built for product %s but the page is now on %s; removing it.",
+          uuid,
+          uuidNow || "(no uuid in url)"
+        );
+        if (btn.parentNode) btn.parentNode.removeChild(btn);
+        scheduleTryInject();
+        return;
+      }
 
       // Synchronous, before any await: this is the affordance for the gap
       // while openConfirmDialog awaits its fetch + permissions check.
@@ -972,27 +997,97 @@
 
   // --- orchestration --------------------------------------------------------
   async function tryInject() {
+    // A dialog is open: leave the button alone entirely, stale or not. Beyond
+    // avoiding a second injection, the open dialog holds a direct reference to
+    // this element (triggerBtn) for its focus return and for every label write
+    // on the import path — rebuilding underneath it would leave the import
+    // reporting into a detached node. The product the dialog names was captured
+    // when it opened and is the one the user is being asked to confirm; the
+    // rebuild happens on the next pass after it closes.
     if (dialogOpen) return;
-    if (buttonPresent()) return;
 
-    var uuid = getCurrentUuid();
-    if (!uuid) {
+    var currentUuid = readCurrentUuid();
+    var existing = document.getElementById(BTN_ID);
+
+    // --- product identity check ---------------------------------------------
+    // This replaces a bare "a button already exists, so there is nothing to
+    // do". That is only true if the button on screen was built for the product
+    // on screen. Its click handler captures the uuid AND the classification of
+    // whichever render created it, so the two can silently diverge: the
+    // marketplace is a React SPA, and if it ever moves from product A to
+    // product B by mutating the existing header in place rather than tearing it
+    // down, our button is never removed, the old early return fires, and the
+    // stale button goes on importing A's artifact into a live production tenant
+    // while the page reads B. A wrong import is a real write to a customer
+    // tenant and cannot be undone, so identity is checked rather than assumed.
+    if (existing) {
+      if (currentUuid && existing.dataset.bellhopUuid === currentUuid) {
+        return; // Button matches the product on screen. The common case.
+      }
+
+      // Two cases are removed here, deliberately together: a stamp for a
+      // different product, and no readable uuid at all. The second is the
+      // interesting one, and removal is still the safe answer — a button whose
+      // destination we cannot verify is worse than no button. Leaving it up
+      // means continuing to offer an import whose target we would be guessing
+      // at; removing it costs the user at most a page reload, and the next
+      // mutation pass re-injects on its own the moment a uuid is readable
+      // again. Fail closed, exactly as findAnchorButton and checkProductKind do.
+      console.log(
+        "[bellhop] removing import button: it was built for product %s, the page is now on %s.",
+        existing.dataset.bellhopUuid || "(unstamped)",
+        currentUuid || "(no uuid in url)"
+      );
+      if (existing.parentNode) existing.parentNode.removeChild(existing);
+    }
+
+    // Logged only on the paths that act — the identity fast path above returns
+    // before this, so an idle, correct page stays quiet. The url is redacted
+    // through safeUrlForLog: this frame is handed to us by the tenant's SSO
+    // shell, so its query/fragment can carry session handoff params. The uuid,
+    // the only part actually needed, is logged alongside it.
+    console.log(
+      "[bellhop] current url=%s -> uuid=%s",
+      safeUrlForLog(location.href),
+      currentUuid
+    );
+
+    if (!currentUuid) {
       console.log("[bellhop] no uuid found in current url; skipping.");
       return;
     }
+
+    var uuid = currentUuid;
 
     var downloadBtn = findAnchorButton();
     if (!downloadBtn) {
       return; // Anchor button not on screen right now (or no strategy matched); nothing to anchor to.
     }
 
+    // A rebuild deliberately goes through the same path as a first injection:
+    // classification is per product (kind, destination service, display name,
+    // and the import endpoint that follows from it), so it must be re-derived
+    // for the CURRENT uuid. Nothing is carried over from the button that was
+    // just removed, and there is deliberately no cache to shortcut through —
+    // reusing A's classification for B is the same wrong-artifact bug wearing a
+    // different hat.
     var classification = await checkProductKind(uuid);
     if (!classification) return;
 
     // Re-check after the await in case the SPA re-rendered, the route
-    // changed, or the confirmation dialog was opened in the meantime.
+    // changed, or the confirmation dialog was opened in the meantime. The uuid
+    // is part of that re-check: a route change during the classify round trip
+    // would otherwise inject a button stamped with (and closed over) a product
+    // the page has already navigated away from.
     if (dialogOpen) return;
     if (buttonPresent()) return;
+    if (readCurrentUuid() !== uuid) {
+      console.log(
+        "[bellhop] product changed while classifying %s; not injecting.",
+        uuid
+      );
+      return;
+    }
     downloadBtn = findAnchorButton();
     if (!downloadBtn) return;
 
