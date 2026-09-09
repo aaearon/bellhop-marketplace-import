@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "ES2020",
+    "moduleResolution": "Bundler",
+    "outDir": "extension/lib",
+    "rootDir": "src",
+    "declaration": false,
+    "sourceMap": false
+  },
+  "include": ["src/tenant.ts", "src/base64.ts"]
+}
