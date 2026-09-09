@@ -7,7 +7,7 @@ What stands between this spike and a public Chrome Web Store release, grouped by
 - [ ] **Trademark and vendor sanction.** The extension is named "Idira Marketplace Importer" and automates the vendor's admin UI without vendor sanction. Risk: this is a legal question, not an engineering one — trademark use for an unsanctioned integration can get the listing pulled or draw a cease-and-desist. Strategic risk alongside it: if the vendor ships a native "Install" action, this extension becomes redundant.
 - [ ] **SRS tenants never tested.** The code routes `CPM|SRS → /Platforms/Import` and thereby claims SRS support, but only a CPM platform path has ever been exercised. Risk: shipping a claimed capability that may fail against real SRS data.
 - [ ] **Non-super-admin users never tested.** Every verification run so far used maximum rights. Risk: the extension may fail, partially fail, or behave unpredictably for the majority of real users who are not super admins — untested against a PAM product's permission model.
-- [ ] **Missing Chrome Web Store privacy policy and permission justifications.** The store requires a privacy policy and a written justification per requested permission. `cookies`, requested against a privileged-access-management domain, will draw particular reviewer scrutiny. Risk: submission rejected or delayed at review.
+- [ ] **Chrome Web Store privacy policy and permission justifications — drafted, not finalised.** Drafts in `docs/PRIVACY.md` and `docs/STORE-PERMISSIONS.md`. Still needs: placeholders filled (publisher, contact, hosted URL, effective date), the policy hosted at a public URL, and legal review.
 
 ## Should fix
 
