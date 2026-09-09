@@ -4,7 +4,6 @@ What stands between this spike and a public Chrome Web Store release, grouped by
 
 ## Blockers — must fix before any public release
 
-- [ ] **Hardcoded artifact host.** `extension/manifest.json` declares the S3 bucket `jenkinsmarketplacemaster-prod-content-eu-west-2...` directly in `optional_host_permissions`. This is a vendor-internal name, not a stable public contract. Risk: when the vendor renames or rotates it, every install breaks silently and cannot be fixed without a store update and re-review. *Fix in progress in a parallel task — not yet done.*
 - [ ] **Trademark and vendor sanction.** The extension is named "Idira Marketplace Importer" and automates the vendor's admin UI without vendor sanction. Risk: this is a legal question, not an engineering one — trademark use for an unsanctioned integration can get the listing pulled or draw a cease-and-desist. Strategic risk alongside it: if the vendor ships a native "Install" action, this extension becomes redundant.
 - [ ] **SRS tenants never tested.** The code routes `CPM|SRS → /Platforms/Import` and thereby claims SRS support, but only a CPM platform path has ever been exercised. Risk: shipping a claimed capability that may fail against real SRS data.
 - [ ] **Non-super-admin users never tested.** Every verification run so far used maximum rights. Risk: the extension may fail, partially fail, or behave unpredictably for the majority of real users who are not super admins — untested against a PAM product's permission model.
@@ -31,6 +30,7 @@ What stands between this spike and a public Chrome Web Store release, grouped by
 
 ## Verified working
 
+- Artifact origin is derived from the download URL at runtime and requested per-host; no vendor-internal bucket name is baked into the manifest.
 - End-to-end import of a PSM connection component on a CPM tenant as super admin, including the confirmation dialog, per-tenant optional permission grant, and CSRF handling.
 - Duplicate import is refused, not silently overwritten: `HTTP 409`, `ErrorCode CAWS00001E`. The existing failure path surfaces it, so no pre-flight check is required.
-- 57 unit tests over the pure modules (`base64.ts`, `csrf.ts`, `tenant.ts`, `classify.ts`).
+- 83 unit tests over the pure modules (`base64.ts`, `csrf.ts`, `tenant.ts`, `classify.ts`, `origins.ts`), including the origin allowlist that gates permission requests.
