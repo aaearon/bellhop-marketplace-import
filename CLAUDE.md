@@ -36,9 +36,12 @@ tested standalone.
 ```
 content script (marketplace iframe)
   -> GET /api/downloads/integrations/<uuid>   (same-origin, cookies)
-  -> presigned S3 url
+     ^ at CONFIRMATION-DIALOG OPEN, not on the Import click (see Sequencing)
+  -> presigned S3 url, cached for the click
   -> chrome.runtime.sendMessage
 service worker
+  -> derive + validate artifact origin from that url (src/origins.ts)
+  -> chrome.permissions.request() for the derived origin
   -> fetch S3 bytes                            (CORS-exempt, no cookies)
   -> arrayBufferToBase64
   -> POST <t>-pcloud.cyberark.cloud/.../{ConnectionComponents,Platforms}/Import  (cookies)
@@ -60,7 +63,9 @@ Relative to the marketplace iframe origin:
 - `GET /api/integrations/<uuid>/versions`
 - `GET /api/downloads/integrations/<uuid>` — returns
   `{url, expiresAt, expiresIn: 600, fileName: null, sha256: ""}`. `url` is a
-  presigned AWS S3 link (600s TTL) on an origin outside `cyberark.cloud`.
+  presigned AWS S3 link (600s TTL) on an origin outside `cyberark.cloud`. That
+  origin is not stable and is never hardcoded — see Artifact origin, which also
+  covers why this endpoint is called at dialog-open.
   `fileName`/`sha256` are empty in practice — there is no integrity check
   available from this endpoint. Do not add a fake one.
 
@@ -120,12 +125,18 @@ only reach hosts the extension currently holds a host permission for, so
 narrowing host permissions transitively narrows cookie reach.
 
 `optional_host_permissions` is the *declaration* of what may ever be asked
-for, not what is held: it lists `https://*.cyberark.cloud/*` (the only way to
-declare a per-tenant pcloud host, since the tenant name is unknown until
-runtime), the apex `https://cyberark.cloud/*`, and the S3 bucket. What is
-actually **requested**, and therefore ever granted, is the narrow three-origin
-set below — the wildcard is never requested, and the service worker refuses
-to request it.
+for, not what is held. It lists exactly three patterns, **all** of which are
+declarations only:
+
+- `https://*.cyberark.cloud/*` — the only way to declare a per-tenant pcloud
+  host, since the tenant name is unknown until runtime.
+- `https://cyberark.cloud/*` — the apex.
+- `https://*.amazonaws.com/*` — the artifact bucket, whose name is likewise
+  unknown until runtime (see Artifact origin below).
+
+What is actually **requested**, and therefore ever granted, is the narrow
+three-origin set below. Neither wildcard is ever requested, and the service
+worker refuses to request either.
 
 This matters because the extension sits next to a PAM product.
 `*.cyberark.cloud` + `cookies` as a standing install-time grant means read
@@ -149,7 +160,8 @@ wildcard (`requiredOriginPatterns` in `extension/content.js`):
    only to read the CSRF cookie, which is parent-domain scoped (see Auth). It
    confers nothing on any tenant subdomain: `cyberark.cloud` itself hosts no
    tenant.
-3. The S3 bucket origin — carries the artifact fetch.
+3. The artifact origin — derived at runtime by the service worker from the
+   presigned download url (see Artifact origin). Carries the artifact fetch.
 
 `chrome.permissions.contains()` runs first over all three, so a repeat import
 into an already-granted tenant does not re-prompt. Decline or error fails closed:
@@ -160,9 +172,12 @@ the button reads `Failed: permission not granted` and nothing else is tried.
 script**. Both calls therefore happen in the service worker, reached by
 `chrome.runtime.sendMessage`, and no extension page is involved:
 
-- `permissionsContains` — no user gesture required, so it is asked early, in
-  the same async flow that classifies the product (`checkProductKind`), and its
-  answer is cached on the classification as `alreadyGranted`.
+- `permissionsContains` — no user gesture required, so it is asked early, when
+  the confirmation dialog opens (`openConfirmDialog`), right after the download
+  url resolves; its answer is cached on the dialog's `plan` as
+  `alreadyGranted`. It cannot be asked any earlier than that, because the
+  artifact origin is not known until the download url exists, and the set
+  checked must be exactly the set that would be requested.
 - `permissionsRequest` — `chrome.permissions.request()` runs directly in the
   service worker's `onMessage` handler. Chromium attaches the content script's
   `HasTransientUserActivation()` to the outgoing message
@@ -180,23 +195,85 @@ only the *synchronous* dispatch, so:
 - `content.js`'s click chain (Import button listener → `onImport` → `close()` →
   `handleImportClick`) contains **no `await` and no promise hop** before the
   `sendMessage`. `handleImportClick` is deliberately not `async`; the async
-  work moved to `runImport`, called afterwards. Front-loading `contains()` is
-  what makes this possible.
+  work moved to `runImport`, called afterwards. Resolving the download url and
+  `contains()` at dialog-open is what makes this possible — see Artifact origin.
 - `background.js` handles `permissionsRequest` as the **first** branch of the
   listener, validates synchronously, and calls `request()` in its callback
-  form. No `await` precedes it.
+  form. No `await` precedes it. Origin *derivation* (`originsToRequest`) is
+  synchronous for the same reason — it is pure string/URL work, no I/O.
 
 The requested origins are validated in the service worker before `request()` is
-called: each pattern must be exactly the S3 bucket, exactly the literal
-`https://cyberark.cloud/*`, or match
+called (`isAllowedOriginPattern`, `src/origins.ts`): each pattern must be
+exactly the literal `https://cyberark.cloud/*`, match
 `/^https:\/\/[a-z0-9-]+-pcloud\.cyberark\.cloud\/\*$/` (the `*` sits outside
-the character class so no host-wildcard pattern matches). The apex is an exact
-string comparison, not a pattern — there is deliberately no rule that any
-`*.cyberark.cloud` form could satisfy. Anything else is
-refused with `unexpected origin requested` and `request()` is never reached.
-This keeps a buggy or compromised caller from using the extension to solicit the
-wildcard `https://*.cyberark.cloud/*` that `optional_host_permissions` declares
-— i.e. every tenant at once.
+the character class so no host-wildcard pattern matches), or pass the strict
+artifact-origin validator below. The apex is an exact string comparison, not a
+pattern — there is deliberately no rule that any `*.cyberark.cloud` form could
+satisfy. Anything else is refused with `unexpected origin requested` and
+`request()` is never reached. This keeps a buggy or compromised caller from
+using the extension to solicit either wildcard that
+`optional_host_permissions` declares — every tenant at once, or every
+AWS-hosted origin at once.
+
+## Artifact origin
+
+The artifact origin is **derived at runtime, never hardcoded**. It used to be
+the literal bucket
+`jenkinsmarketplacemaster-prod-content-eu-west-2.s3.eu-west-2.amazonaws.com`,
+pinned in both `optional_host_permissions` and the worker's allowlist. That is
+a Jenkins-generated internal bucket name and it changes without notice: when it
+changed, every installed copy of the extension broke silently, and the only fix
+was shipping a store update. The manifest now declares only
+`https://*.amazonaws.com/*`, and the concrete origin is worked out per import.
+
+**The service worker derives it itself**, in `originsToRequest`
+(`extension/background.js`), from the presigned download url it is about to
+fetch — the same url, one source of truth. It deliberately does not accept an
+origin passed to it by the content script: otherwise a compromised content
+script could talk the worker into requesting a grant for an attacker-chosen
+host just by asserting "trust this origin". `handleImport` re-runs the same
+derivation before fetching, so the origin fetched is the origin that was
+granted.
+
+Validation lives in `src/origins.ts` (`s3OriginPatternFromDownloadUrl`,
+`isValidS3Origin`, `isS3OriginPattern`), unit-tested in `test/origins.test.ts`.
+A requestable artifact origin must be exactly `https://<host>` where `<host>`:
+
+- ends with `.amazonaws.com` and has at least one real label in front — this
+  is what rejects `evil-amazonaws.com` and `amazonaws.com.evil.com`;
+- matches a concrete-hostname regex, which is what rejects the wildcard
+  `https://*.amazonaws.com` itself. **This matters:** `*` is not a forbidden
+  host code point, so `new URL()` alone keeps it in `hostname` and the
+  `endsWith` check would pass. The wildcard is a manifest declaration and must
+  never be a requested origin;
+- carries no embedded userinfo (`user:pass@host`) and no explicit port;
+- is scheme `https:` exactly, with no path, query or fragment.
+
+Anything else returns null and the import **fails closed** with a clear error;
+there is no fallback host and no retry.
+
+### Sequencing: when the download url is fetched
+
+`GET /api/downloads/integrations/<uuid>` runs when the **confirmation dialog
+opens** (`openConfirmDialog` in `extension/content.js`), and nowhere else. Both
+neighbouring placements are wrong:
+
+- **Not at button-injection time.** The url is presigned with a 600s TTL. A
+  user who leaves the product page open and idle would reach the dialog holding
+  an expired link.
+- **Not in the Import click handler.** `chrome.permissions.request()` needs
+  transient user activation, which decays within a few seconds of the click,
+  and this is a network round trip. Awaiting it inside the click would blow the
+  activation window and the native prompt would be refused.
+
+Dialog-open is the only point that satisfies both: maximally fresh, and
+`await`ed to completion before the Import button can possibly be clicked. The
+url is cached on the dialog's `plan` object and reused verbatim by the
+permission request, the import message and the worker's fetch.
+
+If that fetch fails, the dialog **still opens** — but with a `Cannot import:
+<reason>` line and its Import button disabled. A dialog that is doomed to fail
+is never offered as if it would work, and there is no silent fallback.
 
 There is deliberately no settings page, no permission-management UI and no
 "grant all tenants" convenience. Granted origins are visible and individually
@@ -213,6 +290,11 @@ once, and the destination is derived silently from the page origin
 (`deriveOrigins`, returned alongside `kind` from the `classify` message) —
 without this step, nothing distinguishes an import into `acme` from one into
 `acme-uat`.
+
+Opening the dialog is also where the presigned download url is resolved and
+where `permissions.contains()` is asked, both `await`ed before the dialog
+renders — see Sequencing under Artifact origin for why that point and not
+another, and for the disabled/error state when the url cannot be resolved.
 
 ## Auth
 
@@ -281,7 +363,15 @@ time and re-testing.
   some order.
 - Verified only as a super admin, on one connection-component product. A
   lesser-privileged admin, and the platform import path, are untested.
-- Duplicate/re-import behavior is untested.
+- Re-importing an already-imported connection component returns **HTTP 409**
+  with a long `{"ErrorCode":"CAWS00001E","ErrorMessage":...}` body. The button
+  label truncates at 120 chars, which turned that into mid-sentence nonsense,
+  so 409 — and only 409 — is rendered as `Failed: Already imported into this
+  tenant`. It is still a failure, not a success; the raw status and body go to
+  the console (content script and service worker). Every other status keeps
+  the `HTTP <status> - <body>` form. Deliberately not a status→message table:
+  one observed status, one special case.
+- Re-import behaviour for platforms is untested.
 - A 200 from the import endpoint has not been confirmed to mean the
   component actually functions afterward — only that the POST succeeded.
 - The injection anchor (`findDownloadButton` in `extension/content.js`) keys
@@ -332,7 +422,8 @@ CPM/SRS platforms, both on Privilege Cloud.
   module-not-found in the service worker), which is what happened to
   `csrf.ts` before this was fixed.
 - Tests: vitest, `npx vitest run` (or `npm test`). Pure functions
-  (`base64.ts`, `csrf.ts`, `tenant.ts`, `classify.ts`) are unit-tested. Test
+  (`base64.ts`, `csrf.ts`, `tenant.ts`, `classify.ts`, `origins.ts`) are
+  unit-tested. Test
   files use the `*.test.ts` suffix (vitest's default include pattern) so
   `npx vitest run` picks them up with no config. DOM/network paths in
   `extension/content.js` and `extension/background.js` are not — they were

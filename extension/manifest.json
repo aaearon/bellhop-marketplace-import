@@ -25,6 +25,6 @@
   "optional_host_permissions": [
     "https://*.cyberark.cloud/*",
     "https://cyberark.cloud/*",
-    "https://jenkinsmarketplacemaster-prod-content-eu-west-2.s3.eu-west-2.amazonaws.com/*"
+    "https://*.amazonaws.com/*"
   ]
 }

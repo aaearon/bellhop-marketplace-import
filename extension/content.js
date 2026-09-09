@@ -135,21 +135,12 @@
       kind
     );
 
-    var result = {
+    return {
       kind: kind,
       tenant: classification.tenant,
       pcloudOrigin: classification.pcloudOrigin,
       productName: getProductName(detail),
     };
-
-    // Front-loaded on purpose. contains() needs no user gesture, so asking it
-    // here — well before the Import click — means the click handler can stay
-    // fully synchronous up to the permissions.request() message, and a repeat
-    // import into an already-granted tenant skips the prompt entirely.
-    result.originPatterns = requiredOriginPatterns(result);
-    result.alreadyGranted = await alreadyGranted(result.originPatterns);
-
-    return result;
   }
 
   // --- download url extraction --------------------------------------------
@@ -206,7 +197,15 @@
     btn.textContent = "Import to tenant";
 
     btn.addEventListener("click", function () {
-      openConfirmDialog(btn, uuid, classification);
+      // openConfirmDialog is async (it resolves the download url before it
+      // renders). Reset the guard if it throws, or the button would be dead.
+      openConfirmDialog(btn, uuid, classification).catch(function (err) {
+        dialogOpen = false;
+        console.log(
+          "[import-to-tenant] confirmation dialog failed to open: %s",
+          err && err.message ? err.message : String(err)
+        );
+      });
     });
 
     return btn;
@@ -220,13 +219,17 @@
   //
   // chrome.permissions is a "privileged_extension"-context API, so it is
   // undefined here in the content script — both calls are made by the service
-  // worker on our behalf. contains() needs no gesture and is asked early (see
-  // checkProductKind). request() does need one, and Chromium carries this
-  // frame's transient user activation across the sendMessage hop, but only for
-  // the synchronous portion of the click: see the comment on
+  // worker on our behalf. contains() needs no gesture and is asked at
+  // dialog-open (see openConfirmDialog). request() does need one, and Chromium
+  // carries this frame's transient user activation across the sendMessage hop,
+  // but only for the synchronous portion of the click: see the comment on
   // handleImportClick.
-  var S3_ORIGIN_PATTERN =
-    "https://jenkinsmarketplacemaster-prod-content-eu-west-2.s3.eu-west-2.amazonaws.com/*";
+  //
+  // The artifact (S3) origin is deliberately NOT listed here. The vendor bucket
+  // is a Jenkins-generated name that changes without notice, so the service
+  // worker derives that origin itself from the download url it is about to
+  // fetch — this script never names or asserts it.
+  //
   // The bare apex, and only the bare apex. The tenant's XSRF-TOKEN-<guid> is a
   // parent-domain (.cyberark.cloud) SSO cookie, and chrome.cookies gates read
   // access on the cookie's own domain scope rather than the url passed to
@@ -240,18 +243,20 @@
       patterns.push(classification.pcloudOrigin.replace(/\/+$/, "") + "/*");
     }
     patterns.push(APEX_ORIGIN_PATTERN);
-    patterns.push(S3_ORIGIN_PATTERN);
     return patterns;
   }
 
   // Fails closed to false on any error: a false here only costs one extra
-  // native prompt, never a silent import without permission.
-  async function alreadyGranted(origins) {
+  // native prompt, never a silent import without permission. downloadUrl is
+  // passed so the worker derives and appends the artifact origin itself —
+  // the set checked must be exactly the set that would later be requested.
+  async function alreadyGranted(origins, downloadUrl) {
     var result;
     try {
       result = await chrome.runtime.sendMessage({
         type: "permissionsContains",
         origins: origins,
+        downloadUrl: downloadUrl,
       });
     } catch (err) {
       console.log(
@@ -268,9 +273,50 @@
   // with the host page's CSS. Deliberately not window.confirm/alert/prompt:
   // those block the page's event loop, can't show structure, and look like
   // a browser error rather than part of the product.
-  function openConfirmDialog(triggerBtn, uuid, classification) {
+  async function openConfirmDialog(triggerBtn, uuid, classification) {
     if (dialogOpen) return;
     dialogOpen = true;
+
+    // Fetch the presigned download url HERE — at dialog-open — and nowhere
+    // else. Two constraints pin it to this exact point:
+    //
+    //  * NOT at button-injection time. The url is presigned with a 600s TTL;
+    //    a user who leaves the product page open and idle would arrive at the
+    //    dialog holding an expired link.
+    //  * NOT in the Import click handler. chrome.permissions.request() needs
+    //    transient user activation, which decays within a few seconds of the
+    //    click, and this is a network round trip. Awaiting it inside the click
+    //    would blow the activation window and the native prompt would be
+    //    refused.
+    //
+    // Awaited here, so by the time the Import button can be clicked the url is
+    // resolved and cached and the click handler stays synchronous up to the
+    // permissions.request() message. This is also the freshest the url can be
+    // while still being ready before the click.
+    var downloadUrl = null;
+    var downloadError = null;
+    try {
+      downloadUrl = await fetchDownloadUrl(uuid);
+    } catch (err) {
+      downloadError =
+        err && err.message ? err.message : "could not get download url";
+      console.log(
+        "[import-to-tenant] download url fetch failed at dialog open: %s",
+        downloadError
+      );
+    }
+
+    // contains() needs no user gesture, so it is asked here rather than on the
+    // click; a repeat import into an already-granted tenant then skips the
+    // native prompt entirely.
+    var originPatterns = requiredOriginPatterns(classification);
+    var plan = {
+      downloadUrl: downloadUrl,
+      originPatterns: originPatterns,
+      alreadyGranted: downloadUrl
+        ? await alreadyGranted(originPatterns, downloadUrl)
+        : false,
+    };
 
     var kindLabel = KIND_LABELS[classification.kind] || classification.kind;
     var tenant = classification.tenant || "(unknown tenant)";
@@ -370,6 +416,27 @@
       "font-size:14px",
     ].join(";");
 
+    // Fail closed and say so. The dialog still opens — cancelling it must stay
+    // possible and the user needs to see why — but nothing importable exists
+    // without a download url, so Import is disabled rather than offered and
+    // left to fail. No retry, no fallback.
+    var errorLine = null;
+    if (downloadError) {
+      errorLine = document.createElement("p");
+      errorLine.id = DIALOG_PREFIX + "-error";
+      errorLine.style.cssText = [
+        "margin:0 0 16px",
+        "font-size:13px",
+        "color:#b00020",
+        "word-break:break-word",
+      ].join(";");
+      errorLine.textContent = "Cannot import: " + downloadError;
+
+      importBtn.disabled = true;
+      importBtn.style.cursor = "not-allowed";
+      importBtn.style.opacity = "0.5";
+    }
+
     btnRow.appendChild(cancelBtn);
     btnRow.appendChild(importBtn);
 
@@ -379,6 +446,7 @@
     dialog.appendChild(tenantLabel);
     dialog.appendChild(tenantValue);
     dialog.appendChild(hostValue);
+    if (errorLine) dialog.appendChild(errorLine);
     dialog.appendChild(btnRow);
 
     overlay.appendChild(dialog);
@@ -400,8 +468,9 @@
     }
 
     function onImport() {
+      if (importBtn.disabled) return;
       close();
-      handleImportClick(triggerBtn, uuid, classification);
+      handleImportClick(triggerBtn, uuid, classification, plan);
     }
 
     // Simple two-button focus trap: the only focusable elements in the
@@ -448,20 +517,23 @@
   // chrome.permissions.request() run there. Disabling the button, relabelling
   // it and closing the dialog are plain DOM writes and are fine; an await or a
   // .then() hop before the message would not be.
-  function handleImportClick(btn, uuidAtClickTime, classification) {
+  function handleImportClick(btn, uuidAtClickTime, classification, plan) {
     btn.disabled = true;
     btn.textContent = "Importing…";
 
-    // Checked at classification time, so no await is needed here.
-    if (classification.alreadyGranted) {
-      runImport(btn, uuidAtClickTime, classification);
+    // Resolved at dialog-open time, so no await is needed here.
+    if (plan.alreadyGranted) {
+      runImport(btn, classification, plan);
       return;
     }
 
     chrome.runtime.sendMessage(
       {
         type: "permissionsRequest",
-        origins: classification.originPatterns,
+        origins: plan.originPatterns,
+        // The worker derives and validates the artifact origin from this url
+        // itself; it does not take an origin on our word.
+        downloadUrl: plan.downloadUrl,
       },
       function (response) {
         // Fail closed: no host permission for this tenant, no import. Never
@@ -480,28 +552,22 @@
           return;
         }
 
-        runImport(btn, uuidAtClickTime, classification);
+        runImport(btn, classification, plan);
       }
     );
   }
 
-  async function runImport(btn, uuidAtClickTime, classification) {
+  // The download url was resolved when the dialog opened (see
+  // openConfirmDialog) and is reused verbatim here, so the origin the worker
+  // was granted permission for is the origin it actually fetches.
+  async function runImport(btn, classification, plan) {
     var kind = classification.kind;
-
-    var downloadUrl;
-    try {
-      downloadUrl = await fetchDownloadUrl(uuidAtClickTime);
-    } catch (err) {
-      btn.textContent = "Failed: " + (err && err.message ? err.message : "could not get download url");
-      return;
-    }
 
     var response;
     try {
       response = await chrome.runtime.sendMessage({
         type: "import",
-        downloadUrl: downloadUrl,
-        uuid: uuidAtClickTime,
+        downloadUrl: plan.downloadUrl,
         origin: location.origin,
         kind: kind,
       });
@@ -515,11 +581,30 @@
     } else {
       var status = response && response.status;
       var body = response && response.body;
-      var reason = status ? "HTTP " + status : "unknown error";
-      if (body) {
-        reason += " - " + String(body).slice(0, 120);
+
+      // Still a failure, styled and flowed exactly like any other. Only the
+      // wording differs: a re-import returns 409 with a long ErrorCode blob
+      // that this label would truncate mid-sentence into nonsense. The raw
+      // status and body stay in the console (and in the service worker log).
+      console.log(
+        "[import-to-tenant] import failed: status=%s body=%s",
+        status,
+        body
+      );
+
+      // 409 means the item is already present. That is a non-success, but it is
+      // not a failure the user must act on, so it reads as a plain statement
+      // rather than "Failed: Already imported...", which contradicts itself.
+      // The absence of the success tick still distinguishes it visually.
+      if (status === 409) {
+        btn.textContent = "Already imported into this tenant";
+      } else {
+        var reason = status ? "HTTP " + status : "unknown error";
+        if (body) {
+          reason += " - " + String(body).slice(0, 120);
+        }
+        btn.textContent = "Failed: " + reason;
       }
-      btn.textContent = "Failed: " + reason;
     }
   }
 

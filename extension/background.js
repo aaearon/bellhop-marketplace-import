@@ -4,6 +4,7 @@ import { deriveOrigins } from './lib/tenant.js';
 import { arrayBufferToBase64 } from './lib/base64.js';
 import { cookieDomains, findXsrfCookie, xsrfCandidateNames } from './lib/csrf.js';
 import { classifyProduct, importPathFor } from './lib/classify.js';
+import { isAllowedOriginPattern, s3OriginPatternFromDownloadUrl } from './lib/origins.js';
 
 function safeUrlForLog(url) {
   try {
@@ -19,33 +20,36 @@ function isValidKind(kind) {
 }
 
 // --- optional host permissions -------------------------------------------
-// The only three origin patterns this extension ever needs. Anything else is
-// refused before chrome.permissions.request() is called, so a compromised or
-// buggy caller cannot use the extension to solicit the wildcard
-// `https://*.cyberark.cloud/*` that optional_host_permissions declares (i.e.
-// every tenant at once). The `*` is deliberately outside the character class
-// below so no host-wildcard pattern can match.
-var S3_ORIGIN_PATTERN =
-  "https://jenkinsmarketplacemaster-prod-content-eu-west-2.s3.eu-west-2.amazonaws.com/*";
-var PCLOUD_ORIGIN_PATTERN_RE = /^https:\/\/[a-z0-9-]+-pcloud\.cyberark\.cloud\/\*$/;
-// The bare APEX, matched as an exact literal — never a regex, never a
-// subdomain wildcard. chrome.cookies gates read access on the COOKIE's own
-// domain scope, not on the url passed to getAll(): the tenant's
-// XSRF-TOKEN-<guid> is scoped to the parent domain `.cyberark.cloud`, so
-// Chrome checks permission against `https://cyberark.cloud/` and a grant of
-// the exact pcloud origin alone leaves the cookie unreadable. This pattern
-// grants nothing on any tenant subdomain.
-var APEX_ORIGIN_PATTERN = "https://cyberark.cloud/*";
-
-// Synchronous by construction: it runs before request() while the user
+// The origin allowlist and the artifact-origin validator live in
+// src/origins.ts (compiled to extension/lib/origins.js) so they can be unit
+// tested. Anything not on that allowlist is refused before
+// chrome.permissions.request() is called, so a compromised or buggy caller
+// cannot use the extension to solicit the wildcards that
+// optional_host_permissions declares — `https://*.cyberark.cloud/*` (every
+// tenant at once) or `https://*.amazonaws.com/*` (every AWS-hosted origin).
+//
+// The artifact origin is NOT supplied by the caller. The service worker
+// derives it HERE, from the same download url it is itself about to fetch, so
+// there is one source of truth and a hostile content script cannot talk the
+// worker into requesting a grant for an attacker-chosen host by simply
+// asserting "trust this origin".
+//
+// Synchronous by construction: this runs before request(), while the user
 // activation carried across the sendMessage hop is still live.
-function isAllowedOriginPattern(pattern) {
-  if (typeof pattern !== "string") return false;
-  return (
-    pattern === S3_ORIGIN_PATTERN ||
-    pattern === APEX_ORIGIN_PATTERN ||
-    PCLOUD_ORIGIN_PATTERN_RE.test(pattern)
-  );
+function originsToRequest(baseOrigins, downloadUrl) {
+  var origins = Array.isArray(baseOrigins) ? baseOrigins.slice() : [];
+
+  var s3Pattern = s3OriginPatternFromDownloadUrl(downloadUrl);
+  if (!s3Pattern) {
+    return { ok: false, error: "invalid or missing artifact download url" };
+  }
+  origins.push(s3Pattern);
+
+  if (!origins.every(isAllowedOriginPattern)) {
+    return { ok: false, error: "unexpected origin requested" };
+  }
+
+  return { ok: true, origins: origins };
 }
 
 async function handleImport(msg) {
@@ -57,6 +61,15 @@ async function handleImport(msg) {
     var kindMsg = "invalid or missing kind: " + JSON.stringify(kind);
     console.log("[import-to-tenant]", kindMsg);
     return { ok: false, status: 0, body: kindMsg, error: kindMsg };
+  }
+
+  // The artifact origin is derived and validated here too, from the very url
+  // about to be fetched — the same check that gated the permission request.
+  // Fail closed rather than fetching an origin we would never have asked for.
+  if (!s3OriginPatternFromDownloadUrl(downloadUrl)) {
+    var originMsg = "refusing to fetch artifact: invalid download origin";
+    console.log("[import-to-tenant] %s (%s)", originMsg, safeUrlForLog(downloadUrl));
+    return { ok: false, status: 0, body: originMsg, error: originMsg };
   }
 
   console.log("[import-to-tenant] fetching download url:", safeUrlForLog(downloadUrl));
@@ -173,10 +186,13 @@ async function handleImport(msg) {
   var bodyText = await importRes.text();
   var truncated = bodyText.slice(0, 500);
 
+  // Console gets the FULL raw status and body — the UI may show a friendlier
+  // wording (e.g. 409 -> "already imported"), but the raw detail must stay
+  // available for debugging.
   console.log(
     "[import-to-tenant] import response: status=%s body=%s",
     importRes.status,
-    truncated
+    bodyText
   );
 
   return { ok: importRes.ok, status: importRes.status, body: truncated };
@@ -193,16 +209,19 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
   // listener and calling request(); the origin validation below is synchronous
   // for exactly that reason, and request() is used in its callback form.
   if (message.type === "permissionsRequest") {
-    var requested = Array.isArray(message.origins) ? message.origins : [];
+    var plan = originsToRequest(message.origins, message.downloadUrl);
 
-    if (requested.length === 0 || !requested.every(isAllowedOriginPattern)) {
+    if (!plan.ok || plan.origins.length === 0) {
       console.log(
-        "[import-to-tenant] refusing permissions.request for:",
-        JSON.stringify(requested)
+        "[import-to-tenant] refusing permissions.request (%s) for: %s",
+        plan.error || "empty origin set",
+        JSON.stringify(message.origins)
       );
-      sendResponse({ ok: false, error: "unexpected origin requested" });
+      sendResponse({ ok: false, error: plan.error || "unexpected origin requested" });
       return false;
     }
+
+    var requested = plan.origins;
 
     chrome.permissions.request({ origins: requested }, function (granted) {
       if (chrome.runtime.lastError) {
@@ -255,14 +274,18 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
   // one is free to be async. It is asked ahead of the Import click so an
   // already-granted tenant is never re-prompted.
   if (message.type === "permissionsContains") {
-    var origins = Array.isArray(message.origins) ? message.origins : [];
-    if (origins.length === 0) {
+    // Same derivation as permissionsRequest, and deliberately so: the set
+    // checked here must be exactly the set that would be requested, or an
+    // "already granted" answer would let the import proceed without the
+    // artifact origin.
+    var containsPlan = originsToRequest(message.origins, message.downloadUrl);
+    if (!containsPlan.ok || containsPlan.origins.length === 0) {
       sendResponse({ ok: false });
       return false;
     }
 
     chrome.permissions
-      .contains({ origins: origins })
+      .contains({ origins: containsPlan.origins })
       .then(function (held) {
         sendResponse({ ok: !!held });
       })
