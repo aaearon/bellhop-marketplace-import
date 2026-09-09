@@ -453,6 +453,17 @@ time and re-testing.
 
 ## Known limitations
 
+- **A 401 from `/api/downloads/integrations/<uuid>` means the SSO session has
+  gone stale, not that the extension is broken.** The marketplace SPA keeps
+  rendering from state it already holds, so the page looks fine while the one
+  call that needs a live session fails. It surfaces as `Cannot import:
+  download request failed with status 401` in the confirmation dialog, with
+  the Import button disabled — the fail-closed path working as designed, since
+  the dialog never offers an import it knows cannot succeed. A hard refresh of
+  the tenant tab clears it. Observed 2026-09-09 and confirmed fixed by
+  re-authenticating. Diagnostic that separates this from a real bug: click the
+  vendor's own Download button. If that also fails, it is the session; if it
+  succeeds while ours does not, the two requests differ and that is a bug.
 - Connection components and platforms only (see Classification). The button
   fails closed (does not appear) on any product `classifyProduct` doesn't
   recognize, including a bundled product whose `idiraServices` carries both a
