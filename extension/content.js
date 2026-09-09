@@ -12,6 +12,7 @@
   }
 
   var BTN_ID = "import-to-tenant-btn";
+  var IMPORT_BTN_LABEL = "Import to tenant";
   var loggedProductDetail = false;
   var loggedDownloadResponse = false;
 
@@ -188,24 +189,102 @@
     return !!document.getElementById(BTN_ID);
   }
 
+  // --- loading affordance --------------------------------------------------
+  // openConfirmDialog awaits a fetch (the download url) and a permissions
+  // check before it renders anything, so the click needs its own feedback
+  // for that gap or it reads as broken. The spinner is a small inline CSS
+  // animation injected once, prefixed "idira-" so it can't collide with the
+  // host SPA's styles; it respects prefers-reduced-motion by simply not
+  // being shown (falls back to the "Preparing…" text alone).
+  var SPINNER_STYLE_ID = "idira-spinner-style";
+  var BTN_LOADING_CLASS = "idira-btn-loading";
+
+  function ensureSpinnerStyles() {
+    if (document.getElementById(SPINNER_STYLE_ID)) return;
+    var style = document.createElement("style");
+    style.id = SPINNER_STYLE_ID;
+    style.textContent = [
+      ".idira-spinner {",
+      "  display:inline-block;",
+      "  width:10px;",
+      "  height:10px;",
+      "  margin-right:6px;",
+      "  vertical-align:-1px;",
+      "  border:2px solid currentColor;",
+      "  border-right-color:transparent;",
+      "  border-radius:50%;",
+      "}",
+      "@media (prefers-reduced-motion: no-preference) {",
+      "  .idira-spinner { animation: idira-spin .6s linear infinite; }",
+      "}",
+      "@media (prefers-reduced-motion: reduce) {",
+      "  .idira-spinner { display:none; }",
+      "}",
+      "@keyframes idira-spin { to { transform: rotate(360deg); } }",
+    ].join("\n");
+    document.head.appendChild(style);
+  }
+
+  // Synchronous, called before any await in the click handler. Only adds a
+  // class / swaps textContent, so the classNames copied from the vendor's
+  // Download button (for visual consistency) are never overwritten.
+  function setButtonLoading(btn) {
+    btn.disabled = true;
+    btn.classList.add(BTN_LOADING_CLASS);
+    btn.textContent = "";
+    var spinner = document.createElement("span");
+    spinner.className = "idira-spinner";
+    spinner.setAttribute("aria-hidden", "true");
+    btn.appendChild(spinner);
+    btn.appendChild(document.createTextNode("Preparing…"));
+  }
+
+  function clearButtonLoading(btn) {
+    btn.disabled = false;
+    btn.classList.remove(BTN_LOADING_CLASS);
+    btn.textContent = IMPORT_BTN_LABEL;
+  }
+
   function makeImportButton(downloadBtn, uuid, classification) {
+    ensureSpinnerStyles();
+
     var btn = document.createElement("button");
     btn.id = BTN_ID;
     btn.setAttribute("data-import-to-tenant-btn", "true");
     btn.className = downloadBtn.className;
     btn.style.marginLeft = "8px";
-    btn.textContent = "Import to tenant";
+    btn.textContent = IMPORT_BTN_LABEL;
 
     btn.addEventListener("click", function () {
-      // openConfirmDialog is async (it resolves the download url before it
-      // renders). Reset the guard if it throws, or the button would be dead.
-      openConfirmDialog(btn, uuid, classification).catch(function (err) {
-        dialogOpen = false;
-        console.log(
-          "[import-to-tenant] confirmation dialog failed to open: %s",
-          err && err.message ? err.message : String(err)
-        );
-      });
+      // Re-entrancy guard: a click while already loading (or otherwise
+      // disabled) must not fire a second fetch or open a second dialog.
+      if (btn.disabled) return;
+
+      // Synchronous, before any await: this is the affordance for the gap
+      // while openConfirmDialog awaits its fetch + permissions check.
+      setButtonLoading(btn);
+
+      (async function () {
+        try {
+          // openConfirmDialog is async (it resolves the download url before
+          // it renders). Reset the guard if it throws, or the button would
+          // be dead.
+          await openConfirmDialog(btn, uuid, classification);
+        } catch (err) {
+          dialogOpen = false;
+          console.log(
+            "[import-to-tenant] confirmation dialog failed to open: %s",
+            err && err.message ? err.message : String(err)
+          );
+        } finally {
+          // Covers every path: the dialog rendered (normal case, including
+          // the pre-dialog fetch having failed — the dialog still opens with
+          // Import disabled), the early dialogOpen guard returned without
+          // rendering, or openConfirmDialog threw. The button is never left
+          // stuck showing the spinner.
+          clearButtonLoading(btn);
+        }
+      })();
     });
 
     return btn;

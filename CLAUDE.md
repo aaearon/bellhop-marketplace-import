@@ -296,6 +296,12 @@ where `permissions.contains()` is asked, both `await`ed before the dialog
 renders — see Sequencing under Artifact origin for why that point and not
 another, and for the disabled/error state when the url cannot be resolved.
 
+Because that open is `await`ed rather than instant, the "Import to tenant"
+button shows its own loading state (disabled, small inline CSS spinner,
+"Preparing…") for exactly that gap, cleared as soon as `openConfirmDialog`
+returns — on every path, including a failed pre-dialog fetch or a thrown
+error.
+
 ## Auth
 
 The service worker's `fetch` with `credentials: 'include'` carries the tenant
