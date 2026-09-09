@@ -23,6 +23,7 @@ What stands between this spike and a public Chrome Web Store release, grouped by
 
 ## Optional / later
 
+- [ ] **Ephemeral host grants — deferred, not rejected.** `chrome.permissions.remove()` after each import would turn a grant that lasts until manually revoked into one lasting a few seconds, and with the `cookies` permission gone would leave the extension holding nothing at all in its steady state. Deferred because it kills the `alreadyGranted` fast path: every import would show the native Chrome prompt, not just the first into a tenant. That may still be the right trade for a tool that writes into a PAM tenant — the prompt is the security boundary — but it is a user-visible behaviour change, so it is a deliberate decision rather than an oversight. If built, revoke only after the response is read, and add a `chrome.runtime.onStartup` sweep so a worker killed mid-import cannot leak a grant across a restart.
 - [ ] Link to the imported item in Privilege Cloud from the success state.
 - [ ] Firefox port.
 - [ ] Localisation of the extension's own strings.
