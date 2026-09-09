@@ -12,7 +12,6 @@
   }
 
   var BTN_ID = "bellhop-btn";
-  var IMPORT_BTN_LABEL = "Import to Privilege Cloud";
   var loggedProductDetail = false;
   var loggedDownloadResponse = false;
 
@@ -34,6 +33,19 @@
       return value.trim();
     }
     return "this product";
+  }
+
+  // The destination service name comes from the service worker's classify
+  // response (src/classify.ts's serviceDisplayNameFor, round-tripped so this
+  // script doesn't duplicate the kind -> service mapping). Falls back to a
+  // generic label only if that field is ever missing, so the button/dialog
+  // never render a blank.
+  function idleLabelFor(classification) {
+    var service =
+      classification && typeof classification.serviceDisplayName === "string" && classification.serviceDisplayName
+        ? classification.serviceDisplayName
+        : "Privilege Cloud";
+    return "Import into " + service;
   }
 
   // --- uuid extraction --------------------------------------------------
@@ -78,8 +90,8 @@
     }
   }
 
-  // Returns { kind, tenant, pcloudOrigin, productName } for an importable
-  // product, or null (fail closed) if it isn't one.
+  // Returns { kind, tenant, pcloudOrigin, serviceDisplayName, productName }
+  // for an importable product, or null (fail closed) if it isn't one.
   async function checkProductKind(uuid) {
     var url = "/api/integrations/" + encodeURIComponent(uuid);
     var res;
@@ -140,6 +152,7 @@
       kind: kind,
       tenant: classification.tenant,
       pcloudOrigin: classification.pcloudOrigin,
+      serviceDisplayName: classification.serviceDisplayName,
       productName: getProductName(detail),
     };
   }
@@ -368,6 +381,10 @@
     setButtonLabel(btn, "Preparing…");
   }
 
+  // No classification is in scope here (only btn), so the idle label is read
+  // back from data-idle-label, stashed on the element at construction time in
+  // makeImportButton -- rather than threading classification through the
+  // click handler chain just for this.
   function clearButtonLoading(btn) {
     btn.disabled = false;
     btn.classList.remove(BTN_LOADING_CLASS);
@@ -375,11 +392,13 @@
     if (spinner && spinner.parentNode) {
       spinner.parentNode.removeChild(spinner);
     }
-    setButtonLabel(btn, IMPORT_BTN_LABEL);
+    setButtonLabel(btn, btn.dataset.idleLabel || "Import into Privilege Cloud");
   }
 
   function makeImportButton(downloadBtn, uuid, classification) {
     ensureSpinnerStyles();
+
+    var idleLabel = idleLabelFor(classification);
 
     // downloadBtn is only ever the vendor's genuine Download button here:
     // every findAnchorButton() strategy excludes isOwnButton() results, so
@@ -393,7 +412,11 @@
     btn.removeAttribute("onclick");
     btn.id = BTN_ID;
     btn.setAttribute("data-bellhop-btn", "true");
-    btn.setAttribute("aria-label", IMPORT_BTN_LABEL);
+    btn.setAttribute("aria-label", idleLabel);
+    // Stashed here, not threaded as a parameter: clearButtonLoading only has
+    // the <button> in scope (no classification), so it reads the idle label
+    // back from the element rather than duplicating this computation.
+    btn.dataset.idleLabel = idleLabel;
     btn.style.marginLeft = "8px";
 
     // Outlined variant: the clone inherits PrimeReact's exact typography,
@@ -415,12 +438,12 @@
     // markup ever stops having that span so the breakage is diagnosable.
     var label = btn.querySelector(".p-button-label");
     if (label) {
-      label.textContent = IMPORT_BTN_LABEL;
+      label.textContent = idleLabel;
     } else {
       console.warn(
         "[bellhop] cloned Download button had no .p-button-label span; falling back to plain textContent on the button."
       );
-      btn.textContent = IMPORT_BTN_LABEL;
+      btn.textContent = idleLabel;
     }
 
     btn.addEventListener("click", function () {
@@ -653,7 +676,15 @@
 
     var title = document.createElement("h2");
     title.id = titleId;
-    title.textContent = "Import to Idira Privilege Cloud";
+    // Same wording (and the same "into") as the button label, both derived
+    // from idleLabelFor's classification.serviceDisplayName -- this used to
+    // be a separate hardcoded string ("Import to Idira Privilege Cloud") that
+    // had already drifted from the button. Dropping the "Idira" qualifier:
+    // per CLAUDE.md, Marketplace and Privilege Cloud are services of the one
+    // Idira platform, not separate products, so "Idira Privilege Cloud" is
+    // not this service's actual name -- "Privilege Cloud" is, matching the
+    // button and the manifest description.
+    title.textContent = idleLabelFor(classification);
     title.style.cssText = "margin:0 0 16px;font-size:16px;font-weight:600;line-height:1.3;";
 
     var productLine = document.createElement("p");

@@ -3,7 +3,7 @@
 import { deriveOrigins } from './lib/tenant.js';
 import { arrayBufferToBase64 } from './lib/base64.js';
 import { cookieDomains, findXsrfCookie, xsrfCandidateNames } from './lib/csrf.js';
-import { classifyProduct, importPathFor } from './lib/classify.js';
+import { classifyProduct, importPathFor, serviceDisplayNameFor } from './lib/classify.js';
 import { isAllowedOriginPattern, s3OriginPatternFromDownloadUrl } from './lib/origins.js';
 
 function safeUrlForLog(url) {
@@ -266,7 +266,14 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
       );
     }
 
-    sendResponse({ kind: kind, tenant: tenant, pcloudOrigin: pcloudOrigin });
+    var serviceDisplayName = kind ? serviceDisplayNameFor(kind) : null;
+
+    sendResponse({
+      kind: kind,
+      tenant: tenant,
+      pcloudOrigin: pcloudOrigin,
+      serviceDisplayName: serviceDisplayName,
+    });
     return false; // synchronous response
   }
 

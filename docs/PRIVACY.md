@@ -25,7 +25,7 @@
 
 ## What this extension does
 
-Bellhop adds an "Import to Privilege Cloud" button to a product page on the Idira
+Bellhop adds an "Import into Privilege Cloud" button to a product page on the Idira
 marketplace. Marketplace and Privilege Cloud are both services of the one Idira Identity Security
 Platform tenant you are signed into, not separate products — the extension moves an artifact
 between two services of a platform you already use. When clicked, it shows a confirmation dialog
