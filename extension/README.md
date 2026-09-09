@@ -1,7 +1,16 @@
-# Idira Integration Importer
+# Bellhop
 
-> Import integrations from the Idira Marketplace directly into your tenant. Not affiliated with
-> or endorsed by Palo Alto Networks or CyberArk.
+> Bellhop carries integrations from the Idira Marketplace into Privilege Cloud, so you
+> do not have to download a package and upload it again by hand. It currently
+> supports Privilege Cloud connection components and platforms, and it never opens
+> the package: the bytes are passed through unmodified so the signature stays valid.
+>
+> Not affiliated with or endorsed by Palo Alto Networks or CyberArk.
+
+A bellhop carries something you already own to a room you already have a key for,
+without leaving the building — which is what this extension does, since the
+Marketplace and Privilege Cloud are services of the same platform tenant, sharing
+one session, so nothing crosses a trust boundary.
 
 Idira is the Idira Identity Security Platform (formerly the CyberArk Identity Security
 Platform); Marketplace and Privilege Cloud are services of that one platform, sharing a tenant

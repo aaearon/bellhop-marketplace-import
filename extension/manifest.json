@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Idira Integration Importer",
+  "name": "Bellhop",
   "version": "0.1.0",
-  "description": "Import integrations from the Idira Marketplace directly into your tenant.",
+  "description": "Import marketplace integrations into Privilege Cloud without downloading and re-uploading them.",
   "permissions": [
     "cookies"
   ],

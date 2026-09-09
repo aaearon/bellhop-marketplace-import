@@ -1,4 +1,4 @@
-# Chrome Web Store Submission — Idira Integration Importer
+# Chrome Web Store Submission — Bellhop
 
 > **Applies only if pursuing a Chrome Web Store submission** (listed or unlisted). If distribution
 > goes the GitHub/self-hosted route instead, this document can be ignored entirely — see
@@ -13,9 +13,12 @@ justification" fields. Each section below maps to one form field. Verified again
 
 ## Single purpose description
 
-> Idira Integration Importer lets an administrator, on an Idira (CyberArk) marketplace product
-> page, import a connection component or platform artifact directly into the same tenant's
-> Privilege Cloud, replacing the manual download-then-upload workflow. It has no other function.
+> Bellhop carries integrations from the Idira Marketplace into Privilege Cloud, so you
+> do not have to download a package and upload it again by hand. It currently
+> supports Privilege Cloud connection components and platforms, and it never opens
+> the package: the bytes are passed through unmodified so the signature stays valid.
+>
+> Not affiliated with or endorsed by Palo Alto Networks or CyberArk.
 
 ---
 
