@@ -2,7 +2,7 @@
 
 import { deriveOrigins } from './lib/tenant.js';
 import { arrayBufferToBase64 } from './lib/base64.js';
-import { findXsrfCookie } from './lib/csrf.js';
+import { findXsrfCookie, xsrfCandidateNames } from './lib/csrf.js';
 import { classifyProduct, importPathFor } from './lib/classify.js';
 
 function safeUrlForLog(url) {
@@ -16,6 +16,24 @@ function safeUrlForLog(url) {
 
 function isValidKind(kind) {
   return kind === "connection-component" || kind === "platform";
+}
+
+// --- optional host permissions -------------------------------------------
+// The only two origin patterns this extension ever needs. Anything else is
+// refused before chrome.permissions.request() is called, so a compromised or
+// buggy caller cannot use the extension to solicit the wildcard
+// `https://*.cyberark.cloud/*` that optional_host_permissions declares (i.e.
+// every tenant at once). The `*` is deliberately outside the character class
+// below so no host-wildcard pattern can match.
+var S3_ORIGIN_PATTERN =
+  "https://jenkinsmarketplacemaster-prod-content-eu-west-2.s3.eu-west-2.amazonaws.com/*";
+var PCLOUD_ORIGIN_PATTERN_RE = /^https:\/\/[a-z0-9-]+-pcloud\.cyberark\.cloud\/\*$/;
+
+// Synchronous by construction: it runs before request() while the user
+// activation carried across the sendMessage hop is still live.
+function isAllowedOriginPattern(pattern) {
+  if (typeof pattern !== "string") return false;
+  return pattern === S3_ORIGIN_PATTERN || PCLOUD_ORIGIN_PATTERN_RE.test(pattern);
 }
 
 async function handleImport(msg) {
@@ -70,13 +88,23 @@ async function handleImport(msg) {
   // the cookies that would be sent to the pcloud origin (the SSO cookie may
   // be scoped to .cyberark.cloud rather than the pcloud host).
   var cookies = await chrome.cookies.getAll({ url: origins.pcloudOrigin });
-  var xsrf = findXsrfCookie(cookies);
+
+  // Pass the pcloud HOSTNAME (not the origin url) as targetHost so
+  // findXsrfCookie can rank candidates by domain specificity — a partner may
+  // be signed in to several tenants at once, so a bare .cyberark.cloud token
+  // must lose to a host-scoped one, and an unrelated tenant's token must be
+  // excluded outright.
+  var pcloudHost = new URL(origins.pcloudOrigin).hostname;
+  var xsrf = findXsrfCookie(cookies, pcloudHost);
 
   if (!xsrf) {
-    var names = cookies.map(function (c) { return c.name; }).join(", ");
+    // Names only, and only XSRF-shaped ones: this shows what was rejected
+    // without printing unrelated cookie names (e.g. SSO tokens). Never log a
+    // cookie VALUE.
+    var names = xsrfCandidateNames(cookies).join(", ");
     var noTokenMsg =
-      "no XSRF-TOKEN cookie found for " + origins.pcloudOrigin +
-      " (cookies present: " + (names || "none") + ")";
+      "no usable XSRF-TOKEN cookie for " + origins.pcloudOrigin +
+      " (XSRF-shaped candidates: " + (names || "none") + ")";
     console.log("[import-to-tenant]", noTokenMsg);
     return { ok: false, status: 0, body: noTokenMsg, error: noTokenMsg };
   }
@@ -124,6 +152,40 @@ async function handleImport(msg) {
 chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
   if (!message) return false;
 
+  // FIRST branch, and deliberately so. chrome.permissions.request() requires a
+  // live user gesture. Chromium propagates the content script's transient user
+  // activation across the sendMessage hop and wraps THIS listener invocation in
+  // an interaction scope — but only for its synchronous portion. So there must
+  // be no `await` (and no promise callback) anywhere between entering this
+  // listener and calling request(); the origin validation below is synchronous
+  // for exactly that reason, and request() is used in its callback form.
+  if (message.type === "permissionsRequest") {
+    var requested = Array.isArray(message.origins) ? message.origins : [];
+
+    if (requested.length === 0 || !requested.every(isAllowedOriginPattern)) {
+      console.log(
+        "[import-to-tenant] refusing permissions.request for:",
+        JSON.stringify(requested)
+      );
+      sendResponse({ ok: false, error: "unexpected origin requested" });
+      return false;
+    }
+
+    chrome.permissions.request({ origins: requested }, function (granted) {
+      if (chrome.runtime.lastError) {
+        console.log(
+          "[import-to-tenant] permissions.request failed:",
+          chrome.runtime.lastError.message
+        );
+        sendResponse({ ok: false, error: chrome.runtime.lastError.message });
+        return;
+      }
+      sendResponse({ ok: !!granted });
+    });
+
+    return true; // keep the channel open for the callback
+  }
+
   if (message.type === "classify") {
     var kind;
     try {
@@ -154,6 +216,30 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
 
     sendResponse({ kind: kind, tenant: tenant, pcloudOrigin: pcloudOrigin });
     return false; // synchronous response
+  }
+
+  // Purely informational: contains() has no user-gesture requirement, so this
+  // one is free to be async. It is asked ahead of the Import click so an
+  // already-granted tenant is never re-prompted.
+  if (message.type === "permissionsContains") {
+    var origins = Array.isArray(message.origins) ? message.origins : [];
+    if (origins.length === 0) {
+      sendResponse({ ok: false });
+      return false;
+    }
+
+    chrome.permissions
+      .contains({ origins: origins })
+      .then(function (held) {
+        sendResponse({ ok: !!held });
+      })
+      .catch(function (err) {
+        var permMsg = err && err.message ? err.message : String(err);
+        console.log("[import-to-tenant] permissions.contains failed:", permMsg);
+        sendResponse({ ok: false });
+      });
+
+    return true; // async response
   }
 
   if (message.type === "import") {

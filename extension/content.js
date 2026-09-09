@@ -27,20 +27,10 @@
     "platform": "Platform",
   };
 
-  // No explicit field name for the product's display name is documented in
-  // the marketplace API (see CLAUDE.md's Classification section). Try the
-  // plausible candidates in order and fall back to a generic label rather
-  // than failing the dialog.
-  var PRODUCT_NAME_FIELDS = ["name", "title", "displayName", "productName", "integrationName"];
-
   function getProductName(detail) {
-    if (detail && typeof detail === "object") {
-      for (var i = 0; i < PRODUCT_NAME_FIELDS.length; i++) {
-        var value = detail[PRODUCT_NAME_FIELDS[i]];
-        if (typeof value === "string" && value.trim()) {
-          return value.trim();
-        }
-      }
+    var value = detail && typeof detail === "object" ? detail.name : null;
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
     }
     return "this product";
   }
@@ -145,12 +135,21 @@
       kind
     );
 
-    return {
+    var result = {
       kind: kind,
       tenant: classification.tenant,
       pcloudOrigin: classification.pcloudOrigin,
       productName: getProductName(detail),
     };
+
+    // Front-loaded on purpose. contains() needs no user gesture, so asking it
+    // here — well before the Import click — means the click handler can stay
+    // fully synchronous up to the permissions.request() message, and a repeat
+    // import into an already-granted tenant skips the prompt entirely.
+    result.originPatterns = requiredOriginPatterns(result);
+    result.alreadyGranted = await alreadyGranted(result.originPatterns);
+
+    return result;
   }
 
   // --- download url extraction --------------------------------------------
@@ -211,6 +210,50 @@
     });
 
     return btn;
+  }
+
+  // --- optional host permissions -------------------------------------------
+  // The extension ships with NO host permissions. The service worker's
+  // cross-origin fetches (S3 artifact, import POST) and chrome.cookies both
+  // need them, so the exact origins for THIS tenant are requested on the
+  // dialog's Import click and granted per tenant.
+  //
+  // chrome.permissions is a "privileged_extension"-context API, so it is
+  // undefined here in the content script — both calls are made by the service
+  // worker on our behalf. contains() needs no gesture and is asked early (see
+  // checkProductKind). request() does need one, and Chromium carries this
+  // frame's transient user activation across the sendMessage hop, but only for
+  // the synchronous portion of the click: see the comment on
+  // handleImportClick.
+  var S3_ORIGIN_PATTERN =
+    "https://jenkinsmarketplacemaster-prod-content-eu-west-2.s3.eu-west-2.amazonaws.com/*";
+
+  function requiredOriginPatterns(classification) {
+    var patterns = [];
+    if (classification && typeof classification.pcloudOrigin === "string" && classification.pcloudOrigin) {
+      patterns.push(classification.pcloudOrigin.replace(/\/+$/, "") + "/*");
+    }
+    patterns.push(S3_ORIGIN_PATTERN);
+    return patterns;
+  }
+
+  // Fails closed to false on any error: a false here only costs one extra
+  // native prompt, never a silent import without permission.
+  async function alreadyGranted(origins) {
+    var result;
+    try {
+      result = await chrome.runtime.sendMessage({
+        type: "permissionsContains",
+        origins: origins,
+      });
+    } catch (err) {
+      console.log(
+        "[import-to-tenant] permissions.contains check failed: %s",
+        err && err.message
+      );
+      return false;
+    }
+    return !!(result && result.ok);
   }
 
   // --- confirmation dialog -------------------------------------------------
@@ -351,7 +394,7 @@
 
     function onImport() {
       close();
-      handleImportClick(triggerBtn, uuid, classification.kind);
+      handleImportClick(triggerBtn, uuid, classification);
     }
 
     // Simple two-button focus trap: the only focusable elements in the
@@ -390,9 +433,53 @@
     cancelBtn.focus();
   }
 
-  async function handleImportClick(btn, uuidAtClickTime, kind) {
+  // NOT async, and nothing above the sendMessage below may await. This runs
+  // synchronously inside the Import button's click event, which is what keeps
+  // the frame's transient user activation live; Chromium attaches that bit to
+  // the outgoing message and re-establishes an interaction scope around the
+  // service worker's onMessage dispatch, which is what lets
+  // chrome.permissions.request() run there. Disabling the button, relabelling
+  // it and closing the dialog are plain DOM writes and are fine; an await or a
+  // .then() hop before the message would not be.
+  function handleImportClick(btn, uuidAtClickTime, classification) {
     btn.disabled = true;
     btn.textContent = "Importing…";
+
+    // Checked at classification time, so no await is needed here.
+    if (classification.alreadyGranted) {
+      runImport(btn, uuidAtClickTime, classification);
+      return;
+    }
+
+    chrome.runtime.sendMessage(
+      {
+        type: "permissionsRequest",
+        origins: classification.originPatterns,
+      },
+      function (response) {
+        // Fail closed: no host permission for this tenant, no import. Never
+        // retried, never fallen back from.
+        if (chrome.runtime.lastError) {
+          console.log(
+            "[import-to-tenant] permissions.request message failed: %s",
+            chrome.runtime.lastError.message
+          );
+        } else if (response && response.error) {
+          console.log("[import-to-tenant] permissions.request refused: %s", response.error);
+        }
+
+        if (!response || !response.ok) {
+          btn.textContent = "Failed: permission not granted";
+          return;
+        }
+
+        runImport(btn, uuidAtClickTime, classification);
+      }
+    );
+  }
+
+  async function runImport(btn, uuidAtClickTime, classification) {
+    var kind = classification.kind;
 
     var downloadUrl;
     try {

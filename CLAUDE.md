@@ -46,9 +46,9 @@ service worker
 ```
 
 The fetch/POST split across two contexts is required, not stylistic: a
-content script is not CORS-exempt, but an MV3 service worker with
-`host_permissions` is. The S3 fetch and the import POST both have to happen
-in the service worker (`extension/background.js`); the button and page
+content script is not CORS-exempt, but an MV3 service worker holding a host
+permission for the target is. The S3 fetch and the import POST both have to
+happen in the service worker (`extension/background.js`); the button and page
 inspection live in the content script (`extension/content.js`).
 
 ## Marketplace API
@@ -110,6 +110,78 @@ byte-for-byte — any unzip/re-zip breaks the signature. This is why the code
 never opens the zip; it only checks the two-byte `PK` magic header before
 forwarding it.
 
+## Permissions
+
+The extension installs with **no host access and no cookie reach**.
+`extension/manifest.json` declares both host patterns under
+`optional_host_permissions`, never `host_permissions`. `"permissions":
+["cookies"]` stays declared but is inert on its own: `chrome.cookies` can
+only reach hosts the extension currently holds a host permission for, so
+narrowing host permissions transitively narrows cookie reach.
+
+This matters because the extension sits next to a PAM product.
+`*.cyberark.cloud` + `cookies` as a standing install-time grant means read
+access to the session cookie of every customer tenant a partner is signed in
+to, forever. Optional permissions make that grant per-tenant, explicit, and
+revocable.
+
+`content_scripts.matches` is unaffected and stays broad: a declared content
+script runs without any host permission, and its same-origin fetches
+(`/api/integrations/...`, `/api/downloads/integrations/...`) need none
+either. Only the service worker's cross-origin fetches and `chrome.cookies`
+need host access, and both happen after a user click.
+
+The dialog's Import button requests the **exact** origins for that tenant —
+`https://<t>-pcloud.cyberark.cloud/*` (built from the `pcloudOrigin` the
+classify response already returns) plus the S3 bucket origin — never a
+wildcard. `chrome.permissions.contains()` runs first, so a repeat import into
+an already-granted tenant does not re-prompt. Decline or error fails closed:
+the button reads `Failed: permission not granted` and nothing else is tried.
+
+`chrome.permissions` is a `privileged_extension`-context API (Chromium
+`extensions/common/api/_api_features.json`), so it is **undefined in a content
+script**. Both calls therefore happen in the service worker, reached by
+`chrome.runtime.sendMessage`, and no extension page is involved:
+
+- `permissionsContains` — no user gesture required, so it is asked early, in
+  the same async flow that classifies the product (`checkProductKind`), and its
+  answer is cached on the classification as `alreadyGranted`.
+- `permissionsRequest` — `chrome.permissions.request()` runs directly in the
+  service worker's `onMessage` handler. Chromium attaches the content script's
+  `HasTransientUserActivation()` to the outgoing message
+  (`messaging_util.cc`), carries it across the hop as the `user_gesture` bit on
+  the `Message` struct (`message_port.mojom`), and wraps the worker's
+  `onMessage` dispatch in an interaction scope when that bit is set
+  (`native_renderer_messaging_service.cc`); `PermissionsRequestFunction::Run()`
+  gates only on `user_gesture()`, with no context-type check
+  (`permissions_api.cc`). Confirmed against current Chromium source, not a bug
+  tracker entry.
+
+**The constraint this imposes is sequencing.** The interaction scope covers
+only the *synchronous* dispatch, so:
+
+- `content.js`'s click chain (Import button listener → `onImport` → `close()` →
+  `handleImportClick`) contains **no `await` and no promise hop** before the
+  `sendMessage`. `handleImportClick` is deliberately not `async`; the async
+  work moved to `runImport`, called afterwards. Front-loading `contains()` is
+  what makes this possible.
+- `background.js` handles `permissionsRequest` as the **first** branch of the
+  listener, validates synchronously, and calls `request()` in its callback
+  form. No `await` precedes it.
+
+The requested origins are validated in the service worker before `request()` is
+called: each pattern must be exactly the S3 bucket, or match
+`/^https:\/\/[a-z0-9.-]+-pcloud\.cyberark\.cloud\/\*$/` (the `*` sits outside
+the character class so no host-wildcard pattern matches). Anything else is
+refused with `unexpected origin requested` and `request()` is never reached.
+This keeps a buggy or compromised caller from using the extension to solicit the
+wildcard `https://*.cyberark.cloud/*` that `optional_host_permissions` declares
+— i.e. every tenant at once.
+
+There is deliberately no settings page, no permission-management UI and no
+"grant all tenants" convenience. Granted origins are visible and individually
+revocable under Site access in `chrome://extensions`.
+
 ## Confirmation dialog
 
 Clicking "Import to tenant" opens a DOM confirmation dialog (built inline in
@@ -124,21 +196,31 @@ without this step, nothing distinguishes an import into `acme` from one into
 
 ## Auth
 
-The service worker's `fetch` with `credentials: 'include'` plus
-`host_permissions` carries the tenant session cookie — Chrome treats
-extension-initiated requests as same-site when the extension holds host
-permissions for the target. This alone gets the session cookie accepted by
-the PAM API: the first import attempt without a CSRF header returned
-`HTTP 400 - CSRF validation failed`, not a 401/403, confirming the cookie
-was accepted and only the double-submit CSRF token was missing.
+The service worker's `fetch` with `credentials: 'include'` carries the tenant
+session cookie once the tenant's host permission has been granted (see
+Permissions) — Chrome treats extension-initiated requests as same-site when
+the extension holds a host permission for the target. This alone gets the
+session cookie accepted by the PAM API: the first import attempt without a
+CSRF header returned `HTTP 400 - CSRF validation failed`, not a 401/403,
+confirming the cookie was accepted and only the double-submit CSRF token was
+missing.
 
 CSRF is required, and `src/csrf.ts` is wired into `extension/background.js`.
 The worker reads the token with
 `chrome.cookies.getAll({ url: origins.pcloudOrigin })` — the `url` form,
 because the token cookie may be scoped to `.cyberark.cloud` rather than the
 pcloud host — and selects the `XSRF-TOKEN-<guid>` cookie via
-`findXsrfCookie()`. `extension/manifest.json` requires
-`"permissions": ["cookies"]` for this.
+`findXsrfCookie(cookies, targetHost)`. `targetHost` is the **hostname** of
+`origins.pcloudOrigin`, not the full origin url. Passing it is what activates
+the domain-specificity ranking: a host-scoped token beats a `.cyberark.cloud`
+one, and a token scoped to an unrelated tenant is excluded outright. Without
+it only the fail-closed-on-multiple-candidates path runs, which is wrong for a
+partner signed in to several tenants at once. Ambiguity still fails closed.
+
+Cookie diagnostics log **names only, never values**. The "no usable
+XSRF-TOKEN cookie" path logs `xsrfCandidateNames(cookies)` rather than every
+cookie name present: it shows what was rejected and avoids printing unrelated
+names such as SSO tokens.
 
 Open question: the correct request header **name** is still unknown. The
 code sends the token under both `X-XSRF-TOKEN` and `X-<cookie name>` (e.g.
@@ -163,6 +245,13 @@ time and re-testing.
   off the Download button's visible text, not a stable selector, because
   Angular's `_ngcontent-*` attributes are build-hash dependent. A vendor
   frontend redeploy can break this silently.
+- The optional-permission flow has not been exercised against a live tenant —
+  the end-to-end import was confirmed under the old standing
+  `host_permissions`. The gesture propagation is confirmed against Chromium
+  source (see Permissions), but the native grant prompt has not been seen in
+  situ.
+- A granted tenant stays granted until revoked in `chrome://extensions`.
+  Nothing in the extension surfaces or revokes grants, by design.
 - The service worker has a ~30s idle lifetime; the one artifact tested was
   308 KB. A much larger artifact may need an offscreen document to survive
   the fetch + base64 encode.
@@ -206,9 +295,11 @@ CPM/SRS platforms, both on Privilege Cloud.
   validated manually against a live tenant.
 - Chrome match patterns cannot express a partial subdomain wildcard —
   `https://*-marketplace.cyberark.cloud/*` is rejected as an invalid host
-  wildcard. `extension/manifest.json` matches the broad
-  `https://*.cyberark.cloud/*` and `content.js` narrows to the marketplace
-  host by regex on its first line, so it no-ops in every other iframe.
+  wildcard. The `content_scripts` entry in `extension/manifest.json` matches
+  the broad `https://*.cyberark.cloud/*` and `content.js` narrows to the
+  marketplace host by regex on its first line, so it no-ops in every other
+  iframe. This breadth is harmless — a content-script match is not a host
+  permission (see Permissions).
 
 ## recon/
 
