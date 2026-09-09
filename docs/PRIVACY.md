@@ -7,25 +7,11 @@
 >
 > Not affiliated with or endorsed by Palo Alto Networks or CyberArk.
 
-> **DRAFT — NOT LEGAL ADVICE.** This is an unreviewed engineering draft, written from the
-> extension's source code, not a legal document. It must be reviewed and approved by the
-> publisher's legal counsel before it is published or submitted anywhere. Two points counsel
-> should weigh specifically: (1) "Idira" (Palo Alto Networks' rebrand of CyberArk) is used
-> descriptively in the extension's name, description, and README under nominative fair use, with
-> a non-affiliation disclaimer — a weaker exposure than a mark in the product name, but still
-> worth review before public distribution, and (2) the integration it performs is not sanctioned
-> by that vendor. Neither issue is addressed below; both are legal questions, not engineering
-> ones.
->
-> A privacy policy is good practice for a self-distributed security-adjacent tool even without a
-> store requirement, so this document stays useful regardless of which distribution route
-> (Chrome Web Store or GitHub/self-hosted) is chosen.
-
-**Effective date:** [PLACEHOLDER: effective date]
+**Last updated:** 2026-09-09
 
 ## What this extension does
 
-Bellhop adds an "Import to Privilege Cloud" button to a product page on the Idira
+Bellhop adds an "Import into Privilege Cloud" button to a product page on the Idira
 marketplace. Marketplace and Privilege Cloud are both services of the one Idira Identity Security
 Platform tenant you are signed into, not separate products — the extension moves an artifact
 between two services of a platform you already use. When clicked, it shows a confirmation dialog
@@ -42,13 +28,17 @@ user clicks this button.
 - **The artifact file.** After you confirm the import, the extension obtains a temporary,
   expiring download link for the integration artifact and fetches the file bytes from the
   vendor's own content host.
-- **One cookie.** To satisfy your tenant's anti-CSRF (cross-site request forgery) protection,
-  the extension reads a single cookie — the `XSRF-TOKEN-<id>` token your tenant already sets in
-  your browser — and sends its value back as a request header on the import request to that same
-  tenant. This is the only cookie the extension reads. It does not read, and cannot read, any
-  other cookie (including session or authentication cookies), because Chrome only allows an
-  extension to read cookies for websites it currently has explicit permission to access, and this
-  extension is never granted broad access (see Permissions, below).
+- **One cookie's value.** To satisfy your tenant's anti-CSRF (cross-site request forgery)
+  protection, the extension asks Chrome for the cookies visible to your Privilege Cloud host and
+  looks through their names for the one matching the pattern `XSRF-TOKEN-<id>` — the token your
+  tenant already sets in your browser. Only that cookie's value is ever used, and it is sent back
+  as a request header on the import request to that same tenant. No other cookie's value is read,
+  used, or transmitted. (A failure-only diagnostic message, written to the browser console and
+  never shown in the extension's UI, may note the *domain* — never the name or value — of other
+  cookies visible at that scope, to help tell "no token cookie present" apart from "token cookie
+  present but not matched.") The extension cannot read any cookie at all outside a tenant you have
+  explicitly approved, because Chrome only allows an extension to read cookies for websites it
+  currently has explicit permission to access (see Permissions, below).
 
 ## What it transmits, and to whom
 
@@ -63,13 +53,16 @@ into, not a hand-off to a second vendor:
    temporary download link the marketplace issued to you.
 
 The extension does not send data anywhere else. There is no server operated by the publisher of
-this extension. No data passes through the publisher, and none is shared with any third party.
+this extension. No data passes through the publisher, none of it is sold, and none is shared with
+any third party.
 
 ## What it stores
 
 Nothing. The extension does not use browser storage of any kind (no `chrome.storage`, no
 `localStorage`, no `sessionStorage`, no IndexedDB), and it does not write any cookies. It keeps
-no record of what you have imported, and nothing persists between browser sessions.
+no record of what you have imported, and nothing persists between browser sessions. There is
+nothing for you to access, export, or delete, because nothing is retained after each import
+completes.
 
 ## Analytics, tracking, and advertising
 
@@ -84,8 +77,9 @@ how it behaves can change after installation without a new version being publish
 
 ## Permissions, in plain language
 
-- **Reading one cookie (`cookies` permission).** Used only to read the anti-CSRF token described
-  above, and only for tenants you have explicitly approved (see below).
+- **Reading cookies (`cookies` permission).** Used only to find and read the value of one
+  anti-CSRF token cookie (`XSRF-TOKEN-<id>`), and only for tenants you have explicitly approved
+  (see below).
 - **Access to your tenant's site, granted one tenant at a time.** The extension does not have
   standing access to any site when first installed. The first time you use it against a given
   tenant, Chrome shows you a native permission prompt naming that exact tenant's address; nothing
@@ -98,7 +92,7 @@ or to every customer tenant at once.
 
 Because access is granted per tenant, you can review and remove it at any time:
 
-1. Go to `chrome://extensions`.
+1. Go to `chrome://extensions` (or `edge://extensions`).
 2. Find "Bellhop" and open **Details**.
 3. Under **Site access**, review the sites listed and remove any you no longer want the
    extension to access.
@@ -112,13 +106,15 @@ directed at children.
 
 ## Changes to this policy
 
-[PLACEHOLDER: describe how and where updates to this policy will be announced, e.g. a changelog
-at the hosted URL, a version note in the Chrome Web Store listing, etc.]
+Updates to this policy are reflected by a new **Last updated** date above. Any change to what
+data is accessed, why, or where it goes will also be noted in this extension's release notes on
+the Chrome Web Store and Microsoft Edge Add-ons listings.
 
 ## Contact
 
-Publisher: [PLACEHOLDER: publisher legal name]
+This extension is developed and maintained by Tim Schindler. For questions about this policy or
+the extension's data handling, open an issue:
+[github.com/aaearon/bellhop-marketplace-import/issues](https://github.com/aaearon/bellhop-marketplace-import/issues).
 
-Contact email: [PLACEHOLDER: contact email]
-
-This policy is hosted at: [PLACEHOLDER: hosted URL]
+This policy is hosted at:
+[github.com/aaearon/bellhop-marketplace-import/blob/main/docs/PRIVACY.md](https://github.com/aaearon/bellhop-marketplace-import/blob/main/docs/PRIVACY.md)

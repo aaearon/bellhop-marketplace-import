@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { classifyProduct, importPathFor } from "../src/classify.js";
+import { classifyProduct, importPathFor, serviceDisplayNameFor } from "../src/classify.js";
 
 describe("classifyProduct", () => {
   it("1. real PSM connection component payload (Oracle SQL Developer) -> connection-component", () => {
@@ -97,5 +97,19 @@ describe("importPathFor", () => {
 
   it("2. platform -> /Platforms/Import", () => {
     expect(importPathFor("platform")).toBe("/Platforms/Import");
+  });
+});
+
+describe("serviceDisplayNameFor", () => {
+  it("1. connection-component -> Privilege Cloud", () => {
+    expect(serviceDisplayNameFor("connection-component")).toBe("Privilege Cloud");
+  });
+
+  it("2. platform -> Privilege Cloud", () => {
+    expect(serviceDisplayNameFor("platform")).toBe("Privilege Cloud");
+  });
+
+  it("3. both kinds currently map to the same destination service", () => {
+    expect(serviceDisplayNameFor("connection-component")).toBe(serviceDisplayNameFor("platform"));
   });
 });

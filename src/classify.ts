@@ -29,7 +29,7 @@ export function classifyProduct(detail: unknown): ProductKind | null {
 
   if (isConnectionComponent && isPlatform) {
     console.log(
-      "[classify] ambiguous product: idiraServices contains both a PSM marker and a CPM/SRS marker; failing closed.",
+      "[bellhop] classify: ambiguous product: idiraServices contains both a PSM marker and a CPM/SRS marker; failing closed.",
       services
     );
     return null;
@@ -41,4 +41,18 @@ export function classifyProduct(detail: unknown): ProductKind | null {
 
 export function importPathFor(kind: ProductKind): string {
   return kind === "connection-component" ? "/ConnectionComponents/Import" : "/Platforms/Import";
+}
+
+// Display name of the destination service, shown in the button label and the
+// confirmation dialog. Both kinds import into Privilege Cloud today, but this
+// is a per-kind mapping (not a single constant) so a future service -- see
+// "Future direction" in CLAUDE.md -- is a new entry here, not a rewrite of
+// every caller.
+const SERVICE_DISPLAY_NAMES: Record<ProductKind, string> = {
+  "connection-component": "Privilege Cloud",
+  "platform": "Privilege Cloud",
+};
+
+export function serviceDisplayNameFor(kind: ProductKind): string {
+  return SERVICE_DISPLAY_NAMES[kind];
 }

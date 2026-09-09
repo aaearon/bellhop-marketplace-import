@@ -11,9 +11,11 @@ Deliberate size split (do not simplify to one artwork for all sizes):
     parcel-in-hand). Below 48px this silhouette collapses into noise -- the
     character does not survive at 32/16px.
   - 32px and 16px   -> the PARCEL mark alone (the box the character is
-    holding, reduced to just its brass/cream/crimson box-with-ribbon). At
-    toolbar sizes it stays an unambiguous package; the cap/character instead
-    reduces to a cap-shaped blob that reads as a pastry, not headwear.
+    holding, reduced to a plain blue box with a white lid -- no ribbon; at
+    this size a ribbon crossing the box reads as a split, not a decoration,
+    so it's dropped and the lid/face colour boundary alone carries the seam).
+    At toolbar sizes it stays an unambiguous package; the cap/character
+    instead reduces to a cap-shaped blob that reads as a pastry, not headwear.
 This mapping is fixed in TARGET_SIZES / ARTWORK_FOR_SIZE below -- it is not
 something later edits should collapse to "one image, four sizes".
 
@@ -43,7 +45,38 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ICONS_DIR = os.path.join(REPO_ROOT, "extension", "icons")
 
 S = 1024  # master SVG canvas (both character and mark render at this size)
-NAVY, CRIM, DCRIM, BRASS, CREAM = "#0F172A", "#E23E3E", "#B02F35", "#FBBF24", "#FDF6E3"
+
+# ---------------------------------------------------------------- brand palette
+# Idira/CyberArk brand colours -- NOT Palo Alto Networks orange. Idira is PAN's
+# rebrand of CyberArk, but it carries CyberArk's own blue-anchored identity,
+# not PAN's corporate orange (an earlier version of this file used PAN orange;
+# that was wrong and was corrected 2026-09-09).
+# Source-level values, superseding an earlier brandcolorcode.com-derived pass:
+# sampled directly from https://marketplace.idira.pan.dev/brand/idira-marketplace.svg
+# (fill attributes on the live brand SVG) and cross-checked against computed
+# styles on the live marketplace page, 2026-09-09:
+#   - #265BFF -- fill of the logo hexagon mark; cross-validated against the
+#     primary search button, which computes to #2E6BFF (same family).
+#   - #304FFE -- the dark stop of the hero gradient
+#     (linear-gradient(#3D88FF 10%, #304FFE 100%)); an actual brand value, not
+#     a value-scaled derivative.
+#   - #141414 -- fill of the "IDIRA" wordmark in the same SVG; matches
+#     IDIRA_CHARCOAL below exactly.
+# There is no Palo Alto orange anywhere in the brand SVG or computed styles;
+# the one amber note (#FFBB00) is a gold hero-text accent, not used here.
+#
+# Contrast against IDIRA_CHARCOAL (#141414), WCAG relative-luminance ratios:
+#   - IDIRA_BLUE (#265BFF):       ~3.53:1 -- above the 3:1 WCAG minimum for
+#     non-text/graphical objects; tighter than a lightened tint would give,
+#     but the mark is a bold fill area, not fine detail, and the white lid
+#     supplies the strongest separation in the small mark.
+#   - IDIRA_BLUE_SHADE (#304FFE): ~3.22:1 -- used only for small shaded
+#     surfaces on the 48/128 character (near arm, far torso, brim), where
+#     size compensates for the tighter ratio.
+IDIRA_BLUE = "#265BFF"  # Idira primary blue -- logo hexagon fill
+IDIRA_BLUE_SHADE = "#304FFE"  # Idira brand value (hero-gradient dark stop), for shaded/far-side surfaces
+IDIRA_CHARCOAL = "#141414"  # near-black background/ribbon/badge/eyes/mouth
+IDIRA_WHITE = "#FFFFFF"  # white
 
 TARGET_SIZES = [16, 32, 48, 128]
 # size -> which artwork to use ("character" or "mark"); see split above.
@@ -300,27 +333,27 @@ LIDBAND_D = ribbon(_TOP, t0=0.42, t1=0.575, over=0.0)
 
 
 def svg_character(glint=True):
-    g = f'<path d="{H(GLINT)}" fill="{CREAM}"/>' if glint else ""
+    g = f'<path d="{H(GLINT)}" fill="{IDIRA_WHITE}"/>' if glint else ""
     return f"""<svg xmlns="http://www.w3.org/2000/svg" width="{S}" height="{S}" viewBox="0 0 1024 1024">
-<rect width="1024" height="1024" fill="{NAVY}"/>
-<path d="{ARM_NEAR_D}" fill="{DCRIM}"/>
-<path d="{BODY(TORSO)}" fill="{CRIM}"/>
-<path d="{BODY(TORSO_FAR)}" fill="{DCRIM}"/>
-<path d="{ARM_FAR_D}" fill="{CRIM}"/>
-<path d="{H(HEAD)}" fill="{CREAM}"/>
-<path d="{H(EYE_NEAR)}" fill="{NAVY}"/>
-<path d="{H(EYE_FAR)}" fill="{NAVY}"/>
-<path d="{H(MOUTH)}" fill="{NAVY}"/>
+<rect width="1024" height="1024" fill="{IDIRA_CHARCOAL}"/>
+<path d="{ARM_NEAR_D}" fill="{IDIRA_BLUE_SHADE}"/>
+<path d="{BODY(TORSO)}" fill="{IDIRA_BLUE}"/>
+<path d="{BODY(TORSO_FAR)}" fill="{IDIRA_BLUE_SHADE}"/>
+<path d="{ARM_FAR_D}" fill="{IDIRA_BLUE}"/>
+<path d="{H(HEAD)}" fill="{IDIRA_WHITE}"/>
+<path d="{H(EYE_NEAR)}" fill="{IDIRA_CHARCOAL}"/>
+<path d="{H(EYE_FAR)}" fill="{IDIRA_CHARCOAL}"/>
+<path d="{H(MOUTH)}" fill="{IDIRA_CHARCOAL}"/>
 {g}
-<path d="{H(BRIM)}" fill="{DCRIM}"/>
-<path d="{H(CROWN)}" fill="{CRIM}"/>
-<path d="{H(BADGE)}" fill="{BRASS}"/>
-<path d="{HAND_FAR_D}" fill="{CREAM}"/>
-<path d="{LID_D}" fill="{CREAM}"/>
-<path d="{PARCEL_D}" fill="{BRASS}"/>
-<path d="{LIDBAND_D}" fill="{CRIM}"/>
-<path d="{RIBBON_D}" fill="{CRIM}"/>
-<path d="{HAND_NEAR_D}" fill="{CREAM}"/>
+<path d="{H(BRIM)}" fill="{IDIRA_BLUE_SHADE}"/>
+<path d="{H(CROWN)}" fill="{IDIRA_BLUE}"/>
+<path d="{H(BADGE)}" fill="{IDIRA_CHARCOAL}"/>
+<path d="{HAND_FAR_D}" fill="{IDIRA_WHITE}"/>
+<path d="{LID_D}" fill="{IDIRA_WHITE}"/>
+<path d="{PARCEL_D}" fill="{IDIRA_BLUE}"/>
+<path d="{LIDBAND_D}" fill="{IDIRA_CHARCOAL}"/>
+<path d="{RIBBON_D}" fill="{IDIRA_CHARCOAL}"/>
+<path d="{HAND_NEAR_D}" fill="{IDIRA_WHITE}"/>
 </svg>"""
 
 
@@ -346,12 +379,18 @@ def svg_mark():
     sc, tx, ty = _fit([fr, top])
     F = [(x * sc + tx, y * sc + ty) for x, y in rot(fr, _MARK_TILT, 0, 0, 0, 0)]
     T = [(x * sc + tx, y * sc + ty) for x, y in rot(top, _MARK_TILT, 0, 0, 0, 0)]
+    # No ribbon here, deliberately: at 16/32px the box outline IS the mark, and
+    # a vertical ribbon crossing it -- at any contrast high enough to read as
+    # a ribbon -- reads instead as a gap that splits the box into two slabs
+    # (observed: charcoal ribbon on the orange front looked like a quotation
+    # mark, not a parcel). The lid/face colour split alone (white top, orange
+    # front) is the seam and is sufficient to read as a box at this size. The
+    # character artwork at 48/128px keeps its full ribbon detail -- see
+    # svg_character -- since the silhouette is large enough there to carry it.
     return f"""<svg xmlns="http://www.w3.org/2000/svg" width="{S}" height="{S}" viewBox="0 0 1024 1024">
-<rect width="1024" height="1024" fill="{NAVY}"/>
-<path d="{bowed_quad(T, bow=0.004)}" fill="{CREAM}"/>
-<path d="{bowed_quad(F, bow=0.005)}" fill="{BRASS}"/>
-<path d="{ribbon(T, 0.425, 0.575, over=0.0)}" fill="{CRIM}"/>
-<path d="{ribbon(F, 0.425, 0.575, over=0.03)}" fill="{CRIM}"/>
+<rect width="1024" height="1024" fill="{IDIRA_CHARCOAL}"/>
+<path d="{bowed_quad(T, bow=0.004)}" fill="{IDIRA_WHITE}"/>
+<path d="{bowed_quad(F, bow=0.005)}" fill="{IDIRA_BLUE}"/>
 </svg>"""
 
 

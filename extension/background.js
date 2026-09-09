@@ -3,7 +3,7 @@
 import { deriveOrigins } from './lib/tenant.js';
 import { arrayBufferToBase64 } from './lib/base64.js';
 import { cookieDomains, findXsrfCookie, xsrfCandidateNames } from './lib/csrf.js';
-import { classifyProduct, importPathFor } from './lib/classify.js';
+import { classifyProduct, importPathFor, serviceDisplayNameFor } from './lib/classify.js';
 import { isAllowedOriginPattern, s3OriginPatternFromDownloadUrl } from './lib/origins.js';
 
 function safeUrlForLog(url) {
@@ -17,6 +17,50 @@ function safeUrlForLog(url) {
 
 function isValidKind(kind) {
   return kind === "connection-component" || kind === "platform";
+}
+
+// --- message sender guard --------------------------------------------------
+// Defence in depth, not a fix for a live hole. Today nothing but this
+// extension's own content script can reach the listener below — there is no
+// externally_connectable — and every value that matters is validated on its own
+// (isValidKind, s3OriginPatternFromDownloadUrl, isAllowedOriginPattern). What
+// this guards is a FUTURE manifest change: adding externally_connectable, or
+// widening content_scripts.matches past the marketplace host, would otherwise
+// silently hand an unrelated page the ability to drive
+// chrome.permissions.request() and the import POST against a customer tenant,
+// with nothing in this file objecting.
+//
+// Same hostname regex content.js narrows itself with on its first line, kept
+// character-for-character identical on purpose: a stricter pattern here would
+// reject the real content script on some host shape the content script itself
+// accepts, and that failure would look like a broken extension rather than a
+// mismatched allowlist.
+var MARKETPLACE_HOST_RE = /(^|\.)[a-z0-9-]+-marketplace\.cyberark\.cloud$/i;
+
+// Synchronous by construction — a property read, a URL parse and a regex, no
+// await and no promise hop — because the permissionsRequest branch below runs
+// inside the interaction scope Chromium wraps around this dispatch, and any
+// asynchrony here would cost the user gesture and kill the native permission
+// prompt. Do not make this async, and do not move any I/O into it.
+function isTrustedSender(sender) {
+  // A content script always has a tab; an extension page (options, popup) and
+  // another extension's message do not.
+  if (!sender || !sender.tab || typeof sender.tab.id !== "number") return false;
+  // Our own extension, not another one. Lenient if the id is absent rather
+  // than mismatched, since only same-extension messages arrive here at all.
+  if (sender.id && sender.id !== chrome.runtime.id) return false;
+  // The origin of the FRAME that sent the message. sender.origin is the direct
+  // answer where available; sender.url is the frame url and carries the same
+  // origin for the older shape.
+  var from =
+    typeof sender.origin === "string" && sender.origin ? sender.origin : sender.url;
+  if (typeof from !== "string" || !from) return false;
+  try {
+    var u = new URL(from);
+    return u.protocol === "https:" && MARKETPLACE_HOST_RE.test(u.hostname);
+  } catch (err) {
+    return false;
+  }
 }
 
 // --- optional host permissions -------------------------------------------
@@ -201,6 +245,23 @@ async function handleImport(msg) {
 chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
   if (!message) return false;
 
+  // Sender check ahead of every branch, and synchronous so it stays ahead of
+  // permissionsRequest without costing it the user gesture (see
+  // isTrustedSender). Fails closed with an explicit response rather than a
+  // silent drop: every caller in content.js already treats a falsy/absent
+  // response as "not granted" / "failed", so a rejected message surfaces as a
+  // clear failure instead of a hung button.
+  if (!isTrustedSender(sender)) {
+    console.log(
+      "[bellhop] refusing message type=%s from unexpected sender: id=%s frame=%s",
+      message.type,
+      (sender && sender.id) || "(none)",
+      safeUrlForLog(sender && sender.url)
+    );
+    sendResponse({ ok: false, error: "unexpected sender" });
+    return false;
+  }
+
   // FIRST branch, and deliberately so. chrome.permissions.request() requires a
   // live user gesture. Chromium propagates the content script's transient user
   // activation across the sendMessage hop and wraps THIS listener invocation in
@@ -266,7 +327,14 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
       );
     }
 
-    sendResponse({ kind: kind, tenant: tenant, pcloudOrigin: pcloudOrigin });
+    var serviceDisplayName = kind ? serviceDisplayNameFor(kind) : null;
+
+    sendResponse({
+      kind: kind,
+      tenant: tenant,
+      pcloudOrigin: pcloudOrigin,
+      serviceDisplayName: serviceDisplayName,
+    });
     return false; // synchronous response
   }
 

@@ -2,8 +2,8 @@
 
 ## What this is
 
-Bellhop is a Chrome MV3 extension spike: it adds an
-"Import to Privilege Cloud" button beside the "Download" button on Idira marketplace
+Bellhop is a Chrome/Edge MV3 extension spike: it adds an
+"Import into Privilege Cloud" button beside the "Download" button on Idira marketplace
 product pages. Instead of downloading the artifact zip and hand-uploading
 it, the button imports it directly into the same tenant's Privilege Cloud.
 Supports both connection components and platforms (see Classification
@@ -294,7 +294,7 @@ revocable under Site access in `chrome://extensions`.
 
 ## Confirmation dialog
 
-Clicking "Import to Privilege Cloud" opens a DOM confirmation dialog (built inline in
+Clicking "Import into Privilege Cloud" opens a DOM confirmation dialog (built inline in
 `content.js`, not `window.confirm`) instead of importing immediately; only
 its Import button starts the request. It names the product, the kind, and
 the destination tenant/host before any write happens. This exists because
@@ -309,7 +309,7 @@ where `permissions.contains()` is asked, both `await`ed before the dialog
 renders — see Sequencing under Artifact origin for why that point and not
 another, and for the disabled/error state when the url cannot be resolved.
 
-Because that open is `await`ed rather than instant, the "Import to Privilege Cloud"
+Because that open is `await`ed rather than instant, the "Import into Privilege Cloud"
 button shows its own loading state (disabled, small inline CSS spinner,
 "Preparing…") for exactly that gap, cleared as soon as `openConfirmDialog`
 returns — on every path, including a failed pre-dialog fetch or a thrown
@@ -453,6 +453,17 @@ time and re-testing.
 
 ## Known limitations
 
+- **A 401 from `/api/downloads/integrations/<uuid>` means the SSO session has
+  gone stale, not that the extension is broken.** The marketplace SPA keeps
+  rendering from state it already holds, so the page looks fine while the one
+  call that needs a live session fails. It surfaces as `Cannot import:
+  download request failed with status 401` in the confirmation dialog, with
+  the Import button disabled — the fail-closed path working as designed, since
+  the dialog never offers an import it knows cannot succeed. A hard refresh of
+  the tenant tab clears it. Observed 2026-09-09 and confirmed fixed by
+  re-authenticating. Diagnostic that separates this from a real bug: click the
+  vendor's own Download button. If that also fails, it is the session; if it
+  succeeds while ours does not, the two requests differ and that is a bug.
 - Connection components and platforms only (see Classification). The button
   fails closed (does not appear) on any product `classifyProduct` doesn't
   recognize, including a bundled product whose `idiraServices` carries both a
@@ -494,6 +505,68 @@ time and re-testing.
 - This is an unsupported integration against a vendor UI. If the vendor
   ships a native "Install to this tenant" action, this becomes redundant.
 
+## Browser support
+
+Chrome and Edge are the supported targets. Firefox is shelved — not ruled
+out permanently, just not being worked on now — on one hard blocker found
+this session.
+
+**Edge — drop-in, no code changes.** Edge Add-ons runs the unmodified
+Chromium extensions implementation, so `chrome.permissions.request()`/
+`.contains()`, `optional_host_permissions`, MV3 service-worker backgrounds,
+and — critically — the transient-user-activation propagation across
+`runtime.sendMessage` documented from Chromium source under Permissions all
+apply identically: that mechanism is Chromium engine code, not a
+Chrome-branded layer. MV3 is Edge's baseline going forward. The only
+observed difference is cosmetic — Edge's first-install permission-listing
+UI for `optional_host_permissions` renders differently from Chrome's. Same
+manifest, same package; the remaining work is a store listing, not
+porting.
+
+**Firefox — shelved, one hard blocker.** Firefox does not propagate user
+activation across `runtime.sendMessage` into a background `onMessage`
+handler. MDN states `permissions.request()` may only be called inside a
+user-action handler; Bugzilla 1392624 (still OPEN, comment ~2023: "this is
+far from FIXED") tracks precisely the inability to transfer user-input
+context through `runtime.sendMessage` from a content script; Bugzilla
+1397658 is a RESOLVED DUPLICATE of it. The observed runtime error is
+`permissions.request may only be called from a user input handler`. This
+makes the extension's whole click chain throw on Firefox regardless of how
+carefully the synchronous-dispatch discipline documented under Permissions
+is preserved — that discipline is necessary but not sufficient there.
+Working around it requires the grant-triggering click to happen inside an
+extension-owned surface (popup or extension tab) rather than being relayed
+from a page content script, which is a UX redesign for one browser and
+conflicts with the dialog-open sequencing that exists for the presigned
+URL's 600s TTL (see Sequencing under Artifact origin). Estimated at
+low-to-mid single-digit days. Shelved on that basis, not because it's
+impossible.
+
+Three smaller Firefox findings, recorded so they aren't re-researched if
+Firefox is revisited:
+
+- `background.service_worker` is unsupported on Firefox (Bugzilla
+  1573659); it needs `background.scripts` with `"type": "module"` (Firefox
+  112+). One manifest can serve all three browsers. ~1 hour of work.
+- Cookies may be *easier* on Firefox: MDN documents a host permission on a
+  subdomain permitting a parent-domain cookie read — the opposite of the
+  Chrome behaviour documented under Auth that forces the bare-apex
+  `https://cyberark.cloud/*` grant. Unverified against a live tenant; fails
+  closed if wrong.
+- Container tabs are a genuine Firefox-only risk that lands on this
+  extension's actual users — partners signed into multiple tenants at once
+  is the textbook Multi-Account Containers case. `cookies.getAll()` is
+  called with no `storeId`, so it queries only the default store; a small
+  fix threads `sender.tab.cookieStoreId` through. Worse: Bugzilla 1670278
+  (open) indicates a background `fetch` with `credentials: 'include'` may
+  not be scoped to a container's cookie jar at all, meaning the import POST
+  could silently use the wrong identity rather than failing closed. Needs
+  live testing; may not be cleanly fixable.
+
+A `webextension-polyfill` dependency is not warranted for any of this — a
+3-line `var api = typeof browser !== "undefined" ? browser : chrome;` shim
+covers it and preserves the no-bundler convention.
+
 ## Future direction
 
 The Idira Marketplace carries integrations for all of the platform's
@@ -532,7 +605,11 @@ from inline SVG source via ImageMagick `convert` + Pillow; run
   `include` — listing individual files instead of the `src` directory
   silently omits new ones (no compile error, only a runtime
   module-not-found in the service worker), which is what happened to
-  `csrf.ts` before this was fixed.
+  `csrf.ts` before this was fixed. The same gitignored-but-imported
+  relationship means packaging must run `npm run build` immediately
+  before zipping: a naive zip from a fresh clone ships an
+  `extension/lib/` that doesn't exist, and it fails at runtime with no
+  compile-time error — the identical failure mode.
 - Tests: vitest, `npx vitest run` (or `npm test`). Pure functions
   (`base64.ts`, `csrf.ts`, `tenant.ts`, `classify.ts`, `origins.ts`) are
   unit-tested. Test
@@ -548,14 +625,21 @@ from inline SVG source via ImageMagick `convert` + Pillow; run
   iframe. This breadth is harmless — a content-script match is not a host
   permission (see Permissions).
 
-## recon/
+## How the marketplace API was found
 
-`recon/` is a throwaway, MAIN-world diagnostic extension used to discover the
-iframe API calls above — tab-level network capture does not see fetch/XHR
-originating inside cross-origin iframes; only a content script with
-`all_frames: true` does.
+The API calls documented above (see Marketplace API) were found using a throwaway,
+MAIN-world diagnostic browser extension that has since been removed from this
+repository — it was a discovery tool, not part of the product. It was needed
+because tab-level network capture does not see fetch/XHR calls originating
+inside a cross-origin iframe; only a content script with `all_frames: true`
+does, so the marketplace's calls had to be observed from inside the iframe
+itself rather than from the tab's own network panel. It redacted request URLs
+before logging them — query-string values, including the presigned S3
+download link's embedded AWS credentials, were replaced with a
+length-only placeholder, never logged in the clear — and was deleted once
+discovery was complete rather than kept in the tree. The insight above is
+what mattered; the tool itself was never meant to ship.
 
-Security caveat: `recon/observer.js` logs full request URLs, and the
-presigned S3 download URL carries live AWS credentials in its query string.
-Unload `recon/` when not actively diagnosing, and redact query-string values
-if it's ever reused.
+Cookie and URL logging in the shipped extension follows the same policy:
+presigned/credentialed URLs are redacted before they ever reach a log, and
+cookie diagnostics report names and domains only, never values (see Auth).

@@ -12,7 +12,6 @@
   }
 
   var BTN_ID = "bellhop-btn";
-  var IMPORT_BTN_LABEL = "Import to Privilege Cloud";
   var loggedProductDetail = false;
   var loggedDownloadResponse = false;
 
@@ -28,6 +27,27 @@
     "platform": "Platform",
   };
 
+  // --- logging safety ---------------------------------------------------
+  // Mirrors safeUrlForLog() in extension/background.js: keeps the origin and
+  // path (useful for diagnosis, carries nothing secret) and drops the query
+  // string and fragment outright. Every url logged from this file goes
+  // through it, because the artifact download url is a presigned AWS S3 link
+  // whose query string carries live credentials (X-Amz-Signature,
+  // X-Amz-Credential, X-Amz-Security-Token) — those must never reach the
+  // page console. Do not re-widen this to log the full url.
+  //
+  // Never throws, on any input: a logging helper must not be able to break
+  // the import path.
+  function safeUrlForLog(url) {
+    if (typeof url !== "string" || !url) return "(unparseable url)";
+    try {
+      var parsed = new URL(url, location.href);
+      return parsed.origin + parsed.pathname;
+    } catch (err) {
+      return "(unparseable url)";
+    }
+  }
+
   function getProductName(detail) {
     var value = detail && typeof detail === "object" ? detail.name : null;
     if (typeof value === "string" && value.trim()) {
@@ -36,22 +56,34 @@
     return "this product";
   }
 
+  // The destination service name comes from the service worker's classify
+  // response (src/classify.ts's serviceDisplayNameFor, round-tripped so this
+  // script doesn't duplicate the kind -> service mapping). Falls back to a
+  // generic label only if that field is ever missing, so the button/dialog
+  // never render a blank.
+  function idleLabelFor(classification) {
+    var service =
+      classification && typeof classification.serviceDisplayName === "string" && classification.serviceDisplayName
+        ? classification.serviceDisplayName
+        : "Privilege Cloud";
+    return "Import into " + service;
+  }
+
   // --- uuid extraction --------------------------------------------------
   // Ground truth for the exact route shape inside the marketplace iframe is
   // unknown at write time. We try a plausible uuid regex against the full
   // href and log what we find so it can be corrected later if wrong.
   var UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
 
-  function getCurrentUuid() {
+  // Deliberately SILENT, unlike every other read in this file. tryInject()
+  // calls this on every debounced MutationObserver pass just to check that the
+  // injected button still targets the product on screen, and the
+  // overwhelmingly common answer is "it does" — logging that would bury every
+  // other message in the console. The callers that actually act on the value
+  // log it there instead (see tryInject).
+  function readCurrentUuid() {
     var match = location.href.match(UUID_RE);
-    var uuid = match ? match[0] : null;
-    console.log(
-      "[bellhop] getCurrentUuid: href=%s pathname=%s -> uuid=%s",
-      location.href,
-      location.pathname,
-      uuid
-    );
-    return uuid;
+    return match ? match[0] : null;
   }
 
   // --- product detail / classification -----------------------------------
@@ -78,8 +110,8 @@
     }
   }
 
-  // Returns { kind, tenant, pcloudOrigin, productName } for an importable
-  // product, or null (fail closed) if it isn't one.
+  // Returns { kind, tenant, pcloudOrigin, serviceDisplayName, productName }
+  // for an importable product, or null (fail closed) if it isn't one.
   async function checkProductKind(uuid) {
     var url = "/api/integrations/" + encodeURIComponent(uuid);
     var res;
@@ -140,6 +172,7 @@
       kind: kind,
       tenant: classification.tenant,
       pcloudOrigin: classification.pcloudOrigin,
+      serviceDisplayName: classification.serviceDisplayName,
       productName: getProductName(detail),
     };
   }
@@ -159,10 +192,18 @@
 
     if (!loggedDownloadResponse) {
       loggedDownloadResponse = true;
+      // NEVER log `payload` wholesale. payload.url is a presigned S3 link and
+      // its query string carries live AWS credentials — see safeUrlForLog.
+      // The remaining fields are non-secret and are the ones worth having
+      // when a download goes wrong (an expired link, a missing artifact).
       console.log(
-        "[bellhop] /api/downloads/integrations/%s raw response:",
+        "[bellhop] /api/downloads/integrations/%s response: url=%s expiresAt=%s expiresIn=%s fileName=%s sha256=%s",
         uuid,
-        payload
+        safeUrlForLog(payload && payload.url),
+        payload && payload.expiresAt,
+        payload && payload.expiresIn,
+        payload && payload.fileName,
+        payload && payload.sha256
       );
     }
 
@@ -302,18 +343,18 @@
   // openConfirmDialog awaits a fetch (the download url) and a permissions
   // check before it renders anything, so the click needs its own feedback
   // for that gap or it reads as broken. The spinner is a small inline CSS
-  // animation injected once, prefixed "idira-" so it can't collide with the
+  // animation injected once, prefixed "bellhop-" so it can't collide with the
   // host SPA's styles; it respects prefers-reduced-motion by simply not
   // being shown (falls back to the "Preparing…" text alone).
-  var SPINNER_STYLE_ID = "idira-spinner-style";
-  var BTN_LOADING_CLASS = "idira-btn-loading";
+  var SPINNER_STYLE_ID = "bellhop-spinner-style";
+  var BTN_LOADING_CLASS = "bellhop-btn-loading";
 
   function ensureSpinnerStyles() {
     if (document.getElementById(SPINNER_STYLE_ID)) return;
     var style = document.createElement("style");
     style.id = SPINNER_STYLE_ID;
     style.textContent = [
-      ".idira-spinner {",
+      ".bellhop-spinner {",
       "  display:inline-block;",
       "  width:10px;",
       "  height:10px;",
@@ -324,12 +365,12 @@
       "  border-radius:50%;",
       "}",
       "@media (prefers-reduced-motion: no-preference) {",
-      "  .idira-spinner { animation: idira-spin .6s linear infinite; }",
+      "  .bellhop-spinner { animation: bellhop-spin .6s linear infinite; }",
       "}",
       "@media (prefers-reduced-motion: reduce) {",
-      "  .idira-spinner { display:none; }",
+      "  .bellhop-spinner { display:none; }",
       "}",
-      "@keyframes idira-spin { to { transform: rotate(360deg); } }",
+      "@keyframes bellhop-spin { to { transform: rotate(360deg); } }",
     ].join("\n");
     document.head.appendChild(style);
   }
@@ -357,7 +398,7 @@
     btn.disabled = true;
     btn.classList.add(BTN_LOADING_CLASS);
     var spinner = document.createElement("span");
-    spinner.className = "idira-spinner";
+    spinner.className = "bellhop-spinner";
     spinner.setAttribute("aria-hidden", "true");
     var label = btn.querySelector(".p-button-label");
     if (label) {
@@ -368,18 +409,24 @@
     setButtonLabel(btn, "Preparing…");
   }
 
+  // No classification is in scope here (only btn), so the idle label is read
+  // back from data-idle-label, stashed on the element at construction time in
+  // makeImportButton -- rather than threading classification through the
+  // click handler chain just for this.
   function clearButtonLoading(btn) {
     btn.disabled = false;
     btn.classList.remove(BTN_LOADING_CLASS);
-    var spinner = btn.querySelector(".idira-spinner");
+    var spinner = btn.querySelector(".bellhop-spinner");
     if (spinner && spinner.parentNode) {
       spinner.parentNode.removeChild(spinner);
     }
-    setButtonLabel(btn, IMPORT_BTN_LABEL);
+    setButtonLabel(btn, btn.dataset.idleLabel || "Import into Privilege Cloud");
   }
 
   function makeImportButton(downloadBtn, uuid, classification) {
     ensureSpinnerStyles();
+
+    var idleLabel = idleLabelFor(classification);
 
     // downloadBtn is only ever the vendor's genuine Download button here:
     // every findAnchorButton() strategy excludes isOwnButton() results, so
@@ -393,7 +440,19 @@
     btn.removeAttribute("onclick");
     btn.id = BTN_ID;
     btn.setAttribute("data-bellhop-btn", "true");
-    btn.setAttribute("aria-label", IMPORT_BTN_LABEL);
+    btn.setAttribute("aria-label", idleLabel);
+    // The product this button was built for, recorded ON the element. The click
+    // handler below captures `uuid` and `classification` by closure, so a
+    // button that outlives the product it was built for is a button that
+    // imports the wrong artifact — and nothing in the DOM would say so. This
+    // stamp is what lets tryInject() tell "the button on screen belongs to the
+    // product on screen" from "the SPA changed product underneath it"; see the
+    // identity check there for the full failure mode.
+    btn.dataset.bellhopUuid = uuid;
+    // Stashed here, not threaded as a parameter: clearButtonLoading only has
+    // the <button> in scope (no classification), so it reads the idle label
+    // back from the element rather than duplicating this computation.
+    btn.dataset.idleLabel = idleLabel;
     btn.style.marginLeft = "8px";
 
     // Outlined variant: the clone inherits PrimeReact's exact typography,
@@ -415,18 +474,39 @@
     // markup ever stops having that span so the breakage is diagnosable.
     var label = btn.querySelector(".p-button-label");
     if (label) {
-      label.textContent = IMPORT_BTN_LABEL;
+      label.textContent = idleLabel;
     } else {
       console.warn(
         "[bellhop] cloned Download button had no .p-button-label span; falling back to plain textContent on the button."
       );
-      btn.textContent = IMPORT_BTN_LABEL;
+      btn.textContent = idleLabel;
     }
 
     btn.addEventListener("click", function () {
       // Re-entrancy guard: a click while already loading (or otherwise
       // disabled) must not fire a second fetch or open a second dialog.
       if (btn.disabled) return;
+
+      // Identity guard, the click-time half of the check in tryInject().
+      // tryInject() removes and rebuilds this button when the SPA changes
+      // product, but it only runs on a 300ms-debounced MutationObserver pass;
+      // a click landing between an in-place route change and that pass would
+      // otherwise start an import of the PREVIOUS product's artifact into a
+      // live tenant while the page already shows the new one. Synchronous and
+      // essentially free, and the failure it prevents (a wrong write into a
+      // production tenant) cannot be undone. Removing itself here rather than
+      // just returning keeps the two paths agreeing on what a stale button is.
+      var uuidNow = readCurrentUuid();
+      if (uuidNow !== uuid) {
+        console.log(
+          "[bellhop] ignoring click: this button was built for product %s but the page is now on %s; removing it.",
+          uuid,
+          uuidNow || "(no uuid in url)"
+        );
+        if (btn.parentNode) btn.parentNode.removeChild(btn);
+        scheduleTryInject();
+        return;
+      }
 
       // Synchronous, before any await: this is the affordance for the gap
       // while openConfirmDialog awaits its fetch + permissions check.
@@ -590,9 +670,23 @@
     dialog.setAttribute("aria-modal", "true");
     dialog.setAttribute("aria-labelledby", titleId);
     dialog.style.cssText = [
+      // Two named custom properties, both from the Idira palette the icon
+      // set uses (sourced from the brand SVG at
+      // marketplace.idira.pan.dev/brand/idira-marketplace.svg).
+      //
+      // The chrome is charcoal, not blue, deliberately. The Import button
+      // below is #0b5fff, near-identical to Idira's own #265BFF, so a blue
+      // border and heading would wash this dialog into vendor blue and
+      // defeat the point of branding it as the extension's own UI.
+      // Charcoal is the one part of the palette the vendor UI does not use
+      // as chrome, so it reads as deliberate rather than as a mimic.
+      "--bellhop-accent:#141414",
+      // The mark stays Idira blue so it ties back to the toolbar icon.
+      "--bellhop-mark:#265bff",
       "background:#ffffff",
       "color:#1a1a1a",
       "border-radius:8px",
+      "border-top:4px solid var(--bellhop-accent)",
       "padding:24px",
       "max-width:420px",
       "width:90%",
@@ -601,9 +695,53 @@
       "box-sizing:border-box",
     ].join(";");
 
+    // Brand header: identifies this dialog as Bellhop's own UI, not the
+    // marketplace's, before the user reads anything else. Mark is an inline
+    // SVG (a simple parcel glyph, echoing the extension's icon set) rather
+    // than a chrome.runtime.getURL(...) reference to the packaged PNGs —
+    // that would need those icons declared under web_accessible_resources
+    // in manifest.json, which is out of scope for this change (another
+    // change is touching the manifest). The glyph deliberately mirrors the
+    // shipped 16/32px mark: a plain box with a white lid and NO ribbon.
+    // The ribbon was removed from the icon because at small sizes a
+    // high-contrast band across the box destroys the parcel silhouette —
+    // the same reasoning applies at this glyph's 18px, so the two must not
+    // drift apart. Fill reads var(--bellhop-mark).
+    var brandRow = document.createElement("div");
+    brandRow.style.cssText = "display:flex;align-items:center;gap:8px;margin:0 0 4px;";
+
+    var brandMark = document.createElement("span");
+    brandMark.setAttribute("aria-hidden", "true");
+    brandMark.style.cssText = "display:inline-flex;width:18px;height:18px;flex:0 0 18px;";
+    brandMark.innerHTML = [
+      '<svg width="18" height="18" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">',
+      '<rect x="3" y="9" width="18" height="12" rx="2" fill="var(--bellhop-mark)"/>',
+      '<path d="M3 9 L6 4 L21 4 L18 9 Z" fill="#ffffff" stroke="var(--bellhop-mark)" stroke-width="1.5" stroke-linejoin="round"/>',
+      "</svg>",
+    ].join("");
+
+    var brandName = document.createElement("span");
+    brandName.textContent = "Bellhop";
+    brandName.style.cssText = "font-size:14px;font-weight:700;color:var(--bellhop-accent);letter-spacing:0.02em;";
+
+    brandRow.appendChild(brandMark);
+    brandRow.appendChild(brandName);
+
+    var brandSubtitle = document.createElement("p");
+    brandSubtitle.style.cssText = "margin:0 0 16px;font-size:11px;color:#666;";
+    brandSubtitle.textContent = "Browser extension. Not part of Idira.";
+
     var title = document.createElement("h2");
     title.id = titleId;
-    title.textContent = "Import to Idira Privilege Cloud";
+    // Same wording (and the same "into") as the button label, both derived
+    // from idleLabelFor's classification.serviceDisplayName -- this used to
+    // be a separate hardcoded string ("Import to Idira Privilege Cloud") that
+    // had already drifted from the button. Dropping the "Idira" qualifier:
+    // per CLAUDE.md, Marketplace and Privilege Cloud are services of the one
+    // Idira platform, not separate products, so "Idira Privilege Cloud" is
+    // not this service's actual name -- "Privilege Cloud" is, matching the
+    // button and the manifest description.
+    title.textContent = idleLabelFor(classification);
     title.style.cssText = "margin:0 0 16px;font-size:16px;font-weight:600;line-height:1.3;";
 
     var productLine = document.createElement("p");
@@ -687,6 +825,8 @@
     btnRow.appendChild(cancelBtn);
     btnRow.appendChild(importBtn);
 
+    dialog.appendChild(brandRow);
+    dialog.appendChild(brandSubtitle);
     dialog.appendChild(title);
     dialog.appendChild(productLine);
     dialog.appendChild(kindLine);
@@ -857,27 +997,97 @@
 
   // --- orchestration --------------------------------------------------------
   async function tryInject() {
+    // A dialog is open: leave the button alone entirely, stale or not. Beyond
+    // avoiding a second injection, the open dialog holds a direct reference to
+    // this element (triggerBtn) for its focus return and for every label write
+    // on the import path — rebuilding underneath it would leave the import
+    // reporting into a detached node. The product the dialog names was captured
+    // when it opened and is the one the user is being asked to confirm; the
+    // rebuild happens on the next pass after it closes.
     if (dialogOpen) return;
-    if (buttonPresent()) return;
 
-    var uuid = getCurrentUuid();
-    if (!uuid) {
+    var currentUuid = readCurrentUuid();
+    var existing = document.getElementById(BTN_ID);
+
+    // --- product identity check ---------------------------------------------
+    // This replaces a bare "a button already exists, so there is nothing to
+    // do". That is only true if the button on screen was built for the product
+    // on screen. Its click handler captures the uuid AND the classification of
+    // whichever render created it, so the two can silently diverge: the
+    // marketplace is a React SPA, and if it ever moves from product A to
+    // product B by mutating the existing header in place rather than tearing it
+    // down, our button is never removed, the old early return fires, and the
+    // stale button goes on importing A's artifact into a live production tenant
+    // while the page reads B. A wrong import is a real write to a customer
+    // tenant and cannot be undone, so identity is checked rather than assumed.
+    if (existing) {
+      if (currentUuid && existing.dataset.bellhopUuid === currentUuid) {
+        return; // Button matches the product on screen. The common case.
+      }
+
+      // Two cases are removed here, deliberately together: a stamp for a
+      // different product, and no readable uuid at all. The second is the
+      // interesting one, and removal is still the safe answer — a button whose
+      // destination we cannot verify is worse than no button. Leaving it up
+      // means continuing to offer an import whose target we would be guessing
+      // at; removing it costs the user at most a page reload, and the next
+      // mutation pass re-injects on its own the moment a uuid is readable
+      // again. Fail closed, exactly as findAnchorButton and checkProductKind do.
+      console.log(
+        "[bellhop] removing import button: it was built for product %s, the page is now on %s.",
+        existing.dataset.bellhopUuid || "(unstamped)",
+        currentUuid || "(no uuid in url)"
+      );
+      if (existing.parentNode) existing.parentNode.removeChild(existing);
+    }
+
+    // Logged only on the paths that act — the identity fast path above returns
+    // before this, so an idle, correct page stays quiet. The url is redacted
+    // through safeUrlForLog: this frame is handed to us by the tenant's SSO
+    // shell, so its query/fragment can carry session handoff params. The uuid,
+    // the only part actually needed, is logged alongside it.
+    console.log(
+      "[bellhop] current url=%s -> uuid=%s",
+      safeUrlForLog(location.href),
+      currentUuid
+    );
+
+    if (!currentUuid) {
       console.log("[bellhop] no uuid found in current url; skipping.");
       return;
     }
+
+    var uuid = currentUuid;
 
     var downloadBtn = findAnchorButton();
     if (!downloadBtn) {
       return; // Anchor button not on screen right now (or no strategy matched); nothing to anchor to.
     }
 
+    // A rebuild deliberately goes through the same path as a first injection:
+    // classification is per product (kind, destination service, display name,
+    // and the import endpoint that follows from it), so it must be re-derived
+    // for the CURRENT uuid. Nothing is carried over from the button that was
+    // just removed, and there is deliberately no cache to shortcut through —
+    // reusing A's classification for B is the same wrong-artifact bug wearing a
+    // different hat.
     var classification = await checkProductKind(uuid);
     if (!classification) return;
 
     // Re-check after the await in case the SPA re-rendered, the route
-    // changed, or the confirmation dialog was opened in the meantime.
+    // changed, or the confirmation dialog was opened in the meantime. The uuid
+    // is part of that re-check: a route change during the classify round trip
+    // would otherwise inject a button stamped with (and closed over) a product
+    // the page has already navigated away from.
     if (dialogOpen) return;
     if (buttonPresent()) return;
+    if (readCurrentUuid() !== uuid) {
+      console.log(
+        "[bellhop] product changed while classifying %s; not injecting.",
+        uuid
+      );
+      return;
+    }
     downloadBtn = findAnchorButton();
     if (!downloadBtn) return;
 
