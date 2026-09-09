@@ -28,6 +28,18 @@ jobs:
       - name: Build
         run: npm run build
 
+      # extension/manifest.json and package.json carry the version
+      # independently, with nothing but this check keeping them in sync.
+      - name: Check version sync
+        run: npm run check:version
+
+      # Exercise the store-upload zip on every run: extension/lib/ is
+      # gitignored, so a package built from a fresh clone without a
+      # preceding build ships a lib/ that does not exist, and fails at
+      # runtime with no compile-time error.
+      - name: Package
+        run: npm run package
+
       # The build has previously "succeeded" while silently dropping a src/
       # file from extension/lib/ (src/csrf.ts was omitted with no compile
       # error until it 404'd as a runtime module-not-found in the service

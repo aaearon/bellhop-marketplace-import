@@ -1,3 +1,9 @@
+---
+layout: default
+title: Privacy Policy
+permalink: /privacy/
+---
+
 # Privacy Policy — Bellhop
 
 > Bellhop carries integrations from the Idira Marketplace into Privilege Cloud, so you
@@ -118,4 +124,5 @@ the extension's data handling, open an issue:
 [github.com/aaearon/bellhop-marketplace-import/issues](https://github.com/aaearon/bellhop-marketplace-import/issues).
 
 This policy is hosted at:
-[github.com/aaearon/bellhop-marketplace-import/blob/main/docs/PRIVACY.md](https://github.com/aaearon/bellhop-marketplace-import/blob/main/docs/PRIVACY.md)
+[aaearon.github.io/bellhop-marketplace-import/privacy/](https://aaearon.github.io/bellhop-marketplace-import/privacy/)
+(source: [docs/PRIVACY.md](https://github.com/aaearon/bellhop-marketplace-import/blob/main/docs/PRIVACY.md)).

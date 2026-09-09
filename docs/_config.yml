@@ -1,0 +1,6 @@
+theme: jekyll-theme-minimal
+title: Bellhop
+description: >-
+  Chrome/Edge extension that imports Idira Marketplace integrations
+  directly into Privilege Cloud.
+show_downloads: false

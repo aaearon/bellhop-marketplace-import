@@ -678,6 +678,21 @@ from inline SVG source via ImageMagick `convert` + Pillow; run
   marketplace host by regex on its first line, so it no-ops in every other
   iframe. This breadth is harmless — a content-script match is not a host
   permission (see Permissions).
+- Packaging and version sync: `npm run package` builds and zips `extension/`
+  into `dist/` for store submission; `npm run check:version` verifies
+  `extension/manifest.json` and `package.json` report the same version
+  before packaging. Neither script's output (`dist/`) is committed.
+- `docs/` is published as a public GitHub Pages site (project site, built
+  from the `docs/` folder by GitHub's built-in Jekyll, no workflow file) —
+  this is how `docs/PRIVACY.md` satisfies the Chrome Web Store's and Edge
+  Add-ons' requirement for a privacy policy at a public URL, not just a
+  repo file. Any Markdown file under `docs/` meant to render as its own
+  page needs a YAML front matter block (even a minimal one) — Jekyll only
+  processes files that have one; without it, the file is copied through
+  unprocessed rather than rendered as HTML. `docs/PRIVACY.md` and
+  `docs/STORE-PERMISSIONS.md` pin their public paths with an explicit
+  `permalink:` (`/privacy/`, `/store-permissions/`) so the URLs stay stable
+  across renames; `docs/index.md` is the Pages root and links both.
 
 ## How the marketplace API was found
 
