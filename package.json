@@ -1,7 +1,7 @@
 {
   "name": "bellhop-marketplace-import",
   "version": "0.1.0",
-  "description": "Chrome MV3 extension that imports CyberArk/Idira Marketplace integrations (Privilege Cloud connection components and platforms) directly into a tenant's Privilege Cloud, skipping the manual download-then-upload round trip.",
+  "description": "Chrome/Edge MV3 extension that imports Idira (CyberArk) Marketplace integrations (Privilege Cloud connection components and platforms) directly into a tenant's Privilege Cloud, skipping the manual download-then-upload round trip.",
   "private": true,
   "license": "Apache-2.0",
   "type": "module",

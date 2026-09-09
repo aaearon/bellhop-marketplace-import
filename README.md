@@ -1,6 +1,6 @@
 # Bellhop
 
-Bellhop is a Chrome and Edge Manifest V3 extension that adds an "Import into Privilege Cloud" button to Idira Marketplace product pages, so a CyberArk/Idira Privilege Cloud connection component or platform installs into the tenant's Privilege Cloud directly, replacing a manual download-then-upload round trip.
+Bellhop is a Chrome and Edge Manifest V3 extension that adds an "Import into Privilege Cloud" button to Idira Marketplace product pages, so an Idira (CyberArk) Privilege Cloud connection component or platform installs into the tenant's Privilege Cloud directly, replacing a manual download-then-upload round trip.
 
 Not affiliated with or endorsed by Palo Alto Networks or CyberArk. This is an unsupported, spike-quality tool that writes directly into a production Privilege Cloud tenant — read [RELEASE-BLOCKERS.md](RELEASE-BLOCKERS.md) before pointing it at anything you care about.
 
