@@ -15,3 +15,11 @@ extension/lib/
 .idea/
 Thumbs.db
 coverage/
+
+# Video pipeline: generated composition and renders. Regenerate with
+# video/assemble.py + hyperframes (see video/README.md). Shipped renders
+# live in docs/images/.
+video/composition/index.html
+video/composition/renders/
+video/composition/CLAUDE.md
+video/composition/AGENTS.md
