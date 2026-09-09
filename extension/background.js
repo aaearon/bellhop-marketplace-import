@@ -5,6 +5,7 @@ import { arrayBufferToBase64 } from './lib/base64.js';
 import { findXsrfCookie, xsrfCandidateNames } from './lib/csrf.js';
 import { classifyProduct, importPathFor, serviceDisplayNameFor } from './lib/classify.js';
 import { isAllowedOriginPattern, s3OriginPatternFromDownloadUrl } from './lib/origins.js';
+import { describeImportFailure } from './lib/import-error.js';
 
 function safeUrlForLog(url) {
   try {
@@ -171,6 +172,7 @@ async function handleImport(msg, sender) {
 
   var buf = await s3Res.arrayBuffer();
   var bytes = new Uint8Array(buf);
+  var artifactBytes = bytes.length;
 
   if (bytes.length < 2 || bytes[0] !== 0x50 || bytes[1] !== 0x4b) {
     var zipMsg = "not a valid zip (bad signature)";
@@ -276,7 +278,16 @@ async function handleImport(msg, sender) {
     bodyText
   );
 
-  return { ok: importRes.ok, status: importRes.status, body: truncated };
+  // Turns a failure status/body into the button label text — short, and for
+  // the "package too large" case, clear that it's a Privilege Cloud
+  // server-side limit rather than an extension bug (see CLAUDE.md "Known
+  // limitations"). Not computed on success; content.js only reads it in the
+  // failure branch anyway.
+  var message = importRes.ok
+    ? undefined
+    : describeImportFailure(importRes.status, truncated, artifactBytes);
+
+  return { ok: importRes.ok, status: importRes.status, body: truncated, message: message };
 }
 
 chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {

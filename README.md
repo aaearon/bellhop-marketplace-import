@@ -156,6 +156,16 @@ Untested:
 
 Full list, with risk for each: `RELEASE-BLOCKERS.md`.
 
+## Known limitations
+
+- **Large packages can't be imported.** Privilege Cloud enforces its own
+  server-side request-size limit — not a limit this extension imposes, and
+  the exact cutoff isn't published. **The vendor's own Privilege Cloud
+  import UI fails on the same file the same way**, so there's no workaround
+  from the extension side. Bellhop reports this clearly on the button (e.g.
+  "too large for Privilege Cloud") instead of surfacing the raw server
+  exception.
+
 ## More
 
 - `CLAUDE.md` — architecture, permissions model, auth, known limitations.

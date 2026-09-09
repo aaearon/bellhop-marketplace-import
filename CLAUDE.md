@@ -83,13 +83,36 @@ Relative to the marketplace iframe origin:
   origin is not stable and is never hardcoded — see Artifact origin, which also
   covers why this endpoint is called at dialog-open.
   `sha256` was empty on the payloads this was built against, but was
-  **observed populated** (a real 64-hex digest) on 2026-09-09. Treat it as
+  **observed populated** (a real 64-hex digest) on 2026-09-09, including on the
+  WinSCP connection component checked live that day. Treat it as
   sometimes-present: an integrity check against the fetched bytes before the
   import POST now looks possible and is worth building, but it must degrade to
   importing without verification when the field is absent, or it will fail
   closed on products that still return `""`. Nothing verifies it today.
   `fileName` is still empty in practice. Do not invent a digest that the
   endpoint did not supply.
+
+**No endpoint reports the artifact's size, and there is no permission-free way
+to obtain it.** Checked live against `cyberiam-poc` on 2026-09-09, for the
+WinSCP connection component (a 9,725,456-byte artifact): `/api/integrations/<uuid>`
+(24 fields), `/versions` and `/api/downloads/integrations/<uuid>` all carry no
+size, byte-count or content-length field. The obvious fallback also fails:
+`Content-Length` is a CORS-safelisted response header and `fetch` exposes
+headers before the body, so a size probe that aborts after a few bytes would
+work — but the artifact bucket sends no `Access-Control-Allow-Origin`. Verified
+by test, not assumed: a `cors`-mode fetch to the presigned url fails while a
+`no-cors` fetch returns an opaque response, so the request reaches S3 and the
+page's CSP is not the blocker. A content script's isolated world bypasses page
+CSP but not CORS, so it cannot read that header either.
+
+The consequence is that **the confirmation dialog cannot warn about size.** The
+only way to learn the size is the service worker's fetch, which needs the S3
+host permission, which is not held at dialog-open and cannot be requested there
+— the origin is unknown until the download url resolves, and that `await`
+destroys the transient user activation the prompt needs (see Sequencing). A
+static "large packages may be rejected" line would sidestep this but assert a
+threshold that is not known and fire on every small import. Deliberately not
+built; the failure is reported after the fact instead (see Known limitations).
 
 ## Classification
 
@@ -546,16 +569,53 @@ header leaked the session guid in a header name. It sends one now.
   covered by the unit tests, which only reach the pure functions in `src/`.
 - A granted tenant stays granted until revoked in `chrome://extensions`.
   Nothing in the extension surfaces or revokes grants, by design.
-- The service worker has a ~30s idle lifetime and a 30s cap on any single
-  `fetch()`; the one artifact tested was 308 KB. **Encode CPU is not the
-  binding constraint** — measured, `arrayBufferToBase64` costs ~45-50 ms/MB,
-  so encoding alone would not approach 30s until several hundred MB. Memory
-  is: peak heap is roughly 3.8x the artifact size, because the ArrayBuffer,
-  the latin1 binary string, the base64 string and the JSON request body are
-  all live at once (~470 MB for a 128 MB artifact). The S3 download is
-  subject to the same 30s single-fetch cap. An artifact in the tens of MB is
-  where this becomes a real risk, and an offscreen document or a streaming
-  encode would be needed.
+- **Privilege Cloud's own server-side request-size cap is the binding
+  constraint, and it bites far sooner than the service-worker memory/CPU
+  limits below.** Measured: a 9,725,456-byte (9.27 MiB) artifact base64's
+  into a ~12,967,293-byte (~13 MB) JSON body, and the import POST returned
+  `HTTP 500 {"_message":"Maximum request length exceeded.","_exceptionType":"System.Web.HttpException"}`.
+  This is ASP.NET's `httpRuntime maxRequestLength`. **The exact configured
+  value for the Privilege Cloud SaaS backend is not confirmed — do not
+  assume it.** What's publicly known is CyberArk's on-prem PVWA shipping
+  `maxRequestLength="10000"` (10,000 KB ≈ 10 MB) per public KB 00000752;
+  Privilege Cloud is a different (SaaS) deployment of related software and
+  may or may not share that exact figure. Treating 10 MB / "~7.3 MiB of raw
+  zip after base64's ~33% overhead" as a *plausible ballpark inferred from
+  PVWA*, not a confirmed Privilege Cloud number, is the correct level of
+  confidence — the only two hard data points are that 308 KB succeeds and
+  9.27 MiB fails. **Confirmed the vendor's own Privilege Cloud import UI
+  fails on the same file the same way** — this is a Privilege Cloud
+  limitation, not a defect in this extension, and there is no workaround:
+  base64-in-JSON is the only encoding either endpoint accepts (confirmed in
+  CyberArk's API docs and the psPAS PowerShell module). Deliberate design
+  decision: **no client-side pre-flight size gate was added.** The true
+  threshold is unconfirmed, and hardcoding a guessed limit — including the
+  ~7.3 MiB inference above — would fail closed on artifacts that currently
+  work. The POST is still attempted every time regardless of size;
+  `src/import-error.ts` (`describeImportFailure`, wired into `handleImport`
+  in `extension/background.js`) only makes the resulting error legible — it
+  detects this specific ASP.NET exception shape and renders a short "too
+  large for Privilege Cloud … not an extension limit" button label instead
+  of the raw exception JSON (deliberately without asserting a specific
+  threshold, for the same reason), falling through to the existing generic
+  `HTTP <status> - <body>` form for every other error shape. Separately:
+  CyberArk's docs state `Platforms/Import` accepts artifacts up to 20 MB,
+  which cannot fit through a 10,000 KB `maxRequestLength` once base64'd
+  (20 MB raw → ~26.6 MB encoded) *if* Privilege Cloud does share PVWA's
+  configured value — another reason not to treat that figure as confirmed
+  rather than inferred; not otherwise investigated.
+- Below that request-size cap, the service worker has a ~30s idle lifetime
+  and a 30s cap on any single `fetch()`; the one artifact tested was 308 KB.
+  **Encode CPU is not the binding constraint** — measured,
+  `arrayBufferToBase64` costs ~45-50 ms/MB, so encoding alone would not
+  approach 30s until several hundred MB. Memory is: peak heap is roughly
+  3.8x the artifact size, because the ArrayBuffer, the latin1 binary string,
+  the base64 string and the JSON request body are all live at once (~470 MB
+  for a 128 MB artifact). The S3 download is subject to the same 30s
+  single-fetch cap. These limits are likely moot in practice below the
+  (unconfirmed) request-size cap above, since that cap probably rejects
+  anything larger first; they would only
+  matter if Privilege Cloud's own limit were ever raised.
 - Product type is inferred, not declared (see Classification). This is a
   heuristic derived from two observed payloads and may misclassify a shape
   not yet seen.
