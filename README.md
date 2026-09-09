@@ -53,11 +53,19 @@ npm run build
 ```
 
 `npm run build` compiles `src/` into `extension/lib/`, which is gitignored
-and absent from a fresh clone. Skip it and the extension still loads, but
-fails at runtime with a module-not-found in the service worker's console and
-no compile-time error (see `CLAUDE.md`, "Conventions"). This is the one way
-to get a broken install that looks fine until you click the button, and it
-is why the release zip is the safer choice if you are not changing code.
+and absent from a fresh clone. Skip it and the extension **fails to load**:
+`background.js` is a module service worker, and Chromium fetches its entire
+static import graph before registering it, so the missing `lib/` breaks
+registration immediately rather than at first use. `chrome://extensions`
+shows `Service worker registration failed. Status code: 3` and
+`An unknown error occurred when fetching the script.` — with no compile-time
+error anywhere, because `tsc` was never run. That is why the release zip is
+the safer choice if you are not changing code.
+
+If you see that error after building, the Errors pane may be showing a stale
+entry from an earlier load: click **Clear all**, then **Remove** the
+extension and load it again — the reload button alone does not always clear
+it.
 
 Then, whichever way you got the files:
 
