@@ -2,7 +2,7 @@
 
 ## What this is
 
-Bellhop is a Chrome MV3 extension spike: it adds an
+Bellhop is a Chrome/Edge MV3 extension spike: it adds an
 "Import to Privilege Cloud" button beside the "Download" button on Idira marketplace
 product pages. Instead of downloading the artifact zip and hand-uploading
 it, the button imports it directly into the same tenant's Privilege Cloud.
@@ -494,6 +494,73 @@ time and re-testing.
 - This is an unsupported integration against a vendor UI. If the vendor
   ships a native "Install to this tenant" action, this becomes redundant.
 
+## Browser support
+
+Chrome and Edge are the supported targets. Firefox is shelved — not ruled
+out permanently, just not being worked on now — on one hard blocker found
+this session.
+
+**Edge — drop-in, no code changes.** Edge Add-ons runs the unmodified
+Chromium extensions implementation, so `chrome.permissions.request()`/
+`.contains()`, `optional_host_permissions`, MV3 service-worker backgrounds,
+and — critically — the transient-user-activation propagation across
+`runtime.sendMessage` documented from Chromium source under Permissions all
+apply identically: that mechanism is Chromium engine code, not a
+Chrome-branded layer. MV3 is Edge's baseline going forward. The only
+observed difference is cosmetic — Edge's first-install permission-listing
+UI for `optional_host_permissions` renders differently from Chrome's. Same
+manifest, same package; the remaining work is a store listing, not
+porting.
+
+**Firefox — shelved, one hard blocker.** Firefox does not propagate user
+activation across `runtime.sendMessage` into a background `onMessage`
+handler. MDN states `permissions.request()` may only be called inside a
+user-action handler; Bugzilla 1392624 (still OPEN, comment ~2023: "this is
+far from FIXED") tracks precisely the inability to transfer user-input
+context through `runtime.sendMessage` from a content script; Bugzilla
+1397658 is a RESOLVED DUPLICATE of it. The observed runtime error is
+`permissions.request may only be called from a user input handler`. This
+makes the extension's whole click chain throw on Firefox regardless of how
+carefully the synchronous-dispatch discipline documented under Permissions
+is preserved — that discipline is necessary but not sufficient there.
+Working around it requires the grant-triggering click to happen inside an
+extension-owned surface (popup or extension tab) rather than being relayed
+from a page content script, which is a UX redesign for one browser and
+conflicts with the dialog-open sequencing that exists for the presigned
+URL's 600s TTL (see Sequencing under Artifact origin). Estimated at
+low-to-mid single-digit days. Shelved on that basis, not because it's
+impossible.
+
+Three smaller Firefox findings, recorded so they aren't re-researched if
+Firefox is revisited:
+
+- `background.service_worker` is unsupported on Firefox (Bugzilla
+  1573659); it needs `background.scripts` with `"type": "module"` (Firefox
+  112+). One manifest can serve all three browsers. ~1 hour of work.
+- Cookies may be *easier* on Firefox: MDN documents a host permission on a
+  subdomain permitting a parent-domain cookie read — the opposite of the
+  Chrome behaviour documented under Auth that forces the bare-apex
+  `https://cyberark.cloud/*` grant. Unverified against a live tenant; fails
+  closed if wrong.
+- Container tabs are a genuine Firefox-only risk that lands on this
+  extension's actual users — partners signed into multiple tenants at once
+  is the textbook Multi-Account Containers case. `cookies.getAll()` is
+  called with no `storeId`, so it queries only the default store; a small
+  fix threads `sender.tab.cookieStoreId` through. Worse: Bugzilla 1670278
+  (open) indicates a background `fetch` with `credentials: 'include'` may
+  not be scoped to a container's cookie jar at all, meaning the import POST
+  could silently use the wrong identity rather than failing closed. Needs
+  live testing; may not be cleanly fixable.
+
+A `webextension-polyfill` dependency is not warranted for any of this — a
+3-line `var api = typeof browser !== "undefined" ? browser : chrome;` shim
+covers it and preserves the no-bundler convention.
+
+`recon/` must never be included in a shipped package, on Chrome, Edge, or a
+future Firefox build: it is a separate extension with its own manifest and
+it logs full request URLs, including the presigned S3 link that carries
+live AWS credentials in its query string (see recon/ below).
+
 ## Future direction
 
 The Idira Marketplace carries integrations for all of the platform's
@@ -532,7 +599,11 @@ from inline SVG source via ImageMagick `convert` + Pillow; run
   `include` — listing individual files instead of the `src` directory
   silently omits new ones (no compile error, only a runtime
   module-not-found in the service worker), which is what happened to
-  `csrf.ts` before this was fixed.
+  `csrf.ts` before this was fixed. The same gitignored-but-imported
+  relationship means packaging must run `npm run build` immediately
+  before zipping: a naive zip from a fresh clone ships an
+  `extension/lib/` that doesn't exist, and it fails at runtime with no
+  compile-time error — the identical failure mode.
 - Tests: vitest, `npx vitest run` (or `npm test`). Pure functions
   (`base64.ts`, `csrf.ts`, `tenant.ts`, `classify.ts`, `origins.ts`) are
   unit-tested. Test
