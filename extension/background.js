@@ -2,6 +2,7 @@
 
 import { deriveOrigins } from './lib/tenant.js';
 import { arrayBufferToBase64 } from './lib/base64.js';
+import { findXsrfCookie } from './lib/csrf.js';
 
 function safeUrlForLog(url) {
   try {
@@ -52,14 +53,42 @@ async function handleImport(msg) {
   var origins = deriveOrigins(origin);
   var importUrl = origins.pcloudApiBase + "/ConnectionComponents/Import";
 
-  console.log("[import-to-tenant] posting import to:", importUrl);
+  // Double-submit CSRF: the tenant sets an XSRF-TOKEN-<guid> cookie whose
+  // value must be echoed back in a header. Query by `url` so we get exactly
+  // the cookies that would be sent to the pcloud origin (the SSO cookie may
+  // be scoped to .cyberark.cloud rather than the pcloud host).
+  var cookies = await chrome.cookies.getAll({ url: origins.pcloudOrigin });
+  var xsrf = findXsrfCookie(cookies);
+
+  if (!xsrf) {
+    var names = cookies.map(function (c) { return c.name; }).join(", ");
+    var noTokenMsg =
+      "no XSRF-TOKEN cookie found for " + origins.pcloudOrigin +
+      " (cookies present: " + (names || "none") + ")";
+    console.log("[import-to-tenant]", noTokenMsg);
+    return { ok: false, status: 0, body: noTokenMsg, error: noTokenMsg };
+  }
+
+  // The exact header name is NOT confirmed. Both conventional forms are sent:
+  // an extra unrecognised header is harmless, a missing one fails the request.
+  // Narrow this to the single correct header once observed.
+  var headers = { "Content-Type": "application/json" };
+  headers["X-XSRF-TOKEN"] = xsrf.value;
+  headers["X-" + xsrf.name] = xsrf.value;
+
+  console.log(
+    "[import-to-tenant] posting import to: %s (csrf cookie=%s, headers sent=%s)",
+    importUrl,
+    xsrf.name,
+    "X-XSRF-TOKEN, X-" + xsrf.name
+  );
 
   var importRes;
   try {
     importRes = await fetch(importUrl, {
       method: "POST",
       credentials: "include",
-      headers: { "Content-Type": "application/json" },
+      headers: headers,
       body: JSON.stringify({ ImportFile: b64 }),
     });
   } catch (err) {

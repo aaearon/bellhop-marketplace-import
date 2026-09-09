@@ -3,6 +3,9 @@
   "name": "Import to tenant",
   "version": "0.1.0",
   "description": "Import a marketplace connection component into the current tenant.",
+  "permissions": [
+    "cookies"
+  ],
   "content_scripts": [
     {
       "matches": [

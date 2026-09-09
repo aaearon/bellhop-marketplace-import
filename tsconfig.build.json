@@ -8,5 +8,7 @@
     "declaration": false,
     "sourceMap": false
   },
-  "include": ["src/tenant.ts", "src/base64.ts"]
+  "include": [
+    "src"
+  ]
 }
