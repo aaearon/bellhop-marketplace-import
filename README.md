@@ -158,18 +158,13 @@ Full list, with risk for each: `RELEASE-BLOCKERS.md`.
 
 ## Known limitations
 
-- **Large packages can't be imported.** Privilege Cloud enforces a
-  server-side request-size limit (ASP.NET `maxRequestLength`), not a limit
-  this extension imposes — base64-encoding the artifact for the import POST
-  adds ~33% to its size, which is what brings a large-enough zip up against
-  the cap. A 9.27 MB artifact is confirmed to fail; a 308 KB one is confirmed
-  to succeed. The exact cutoff for Privilege Cloud's own configuration isn't
-  published or confirmed, so treat "somewhere in the single-digit MB of raw
-  zip" as a rough estimate, not a guarantee. **The vendor's own Privilege
-  Cloud import UI fails on the same file the same way**, so there's no
-  workaround available from the extension side. Bellhop reports this clearly
-  on the button (e.g. "too large for Privilege Cloud") instead of surfacing
-  the raw `500` server exception.
+- **Large packages can't be imported.** Privilege Cloud enforces its own
+  server-side request-size limit — not a limit this extension imposes, and
+  the exact cutoff isn't published. **The vendor's own Privilege Cloud
+  import UI fails on the same file the same way**, so there's no workaround
+  from the extension side. Bellhop reports this clearly on the button (e.g.
+  "too large for Privilege Cloud") instead of surfacing the raw server
+  exception.
 
 ## More
 
