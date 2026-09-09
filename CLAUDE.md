@@ -110,6 +110,18 @@ byte-for-byte — any unzip/re-zip breaks the signature. This is why the code
 never opens the zip; it only checks the two-byte `PK` magic header before
 forwarding it.
 
+## Confirmation dialog
+
+Clicking "Import to tenant" opens a DOM confirmation dialog (built inline in
+`content.js`, not `window.confirm`) instead of importing immediately; only
+its Import button starts the request. It names the product, the kind, and
+the destination tenant/host before any write happens. This exists because
+implementation partners are authenticated to multiple customer tenants at
+once, and the destination is derived silently from the page origin
+(`deriveOrigins`, returned alongside `kind` from the `classify` message) —
+without this step, nothing distinguishes an import into `acme` from one into
+`acme-uat`.
+
 ## Auth
 
 The service worker's `fetch` with `credentials: 'include'` plus

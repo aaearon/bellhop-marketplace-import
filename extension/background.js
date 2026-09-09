@@ -135,7 +135,24 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
       );
       kind = null;
     }
-    sendResponse(kind);
+
+    // Also derive the destination tenant identity so the content script
+    // doesn't have to duplicate hostname parsing to show it in the
+    // confirmation dialog.
+    var tenant = null;
+    var pcloudOrigin = null;
+    try {
+      var origins = deriveOrigins(message.origin);
+      tenant = origins.tenant;
+      pcloudOrigin = origins.pcloudOrigin;
+    } catch (err) {
+      console.log(
+        "[import-to-tenant] deriveOrigins failed for classify request:",
+        err && err.message ? err.message : String(err)
+      );
+    }
+
+    sendResponse({ kind: kind, tenant: tenant, pcloudOrigin: pcloudOrigin });
     return false; // synchronous response
   }
 

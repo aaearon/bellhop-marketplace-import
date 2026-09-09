@@ -15,6 +15,36 @@
   var loggedProductDetail = false;
   var loggedDownloadResponse = false;
 
+  // Set while the confirmation dialog is open. Guards against the SPA
+  // re-rendering underneath it and tryInject() injecting a second button
+  // or a second dialog.
+  var dialogOpen = false;
+
+  var DIALOG_PREFIX = "import-to-tenant-dialog";
+
+  var KIND_LABELS = {
+    "connection-component": "PSM connection component",
+    "platform": "Platform",
+  };
+
+  // No explicit field name for the product's display name is documented in
+  // the marketplace API (see CLAUDE.md's Classification section). Try the
+  // plausible candidates in order and fall back to a generic label rather
+  // than failing the dialog.
+  var PRODUCT_NAME_FIELDS = ["name", "title", "displayName", "productName", "integrationName"];
+
+  function getProductName(detail) {
+    if (detail && typeof detail === "object") {
+      for (var i = 0; i < PRODUCT_NAME_FIELDS.length; i++) {
+        var value = detail[PRODUCT_NAME_FIELDS[i]];
+        if (typeof value === "string" && value.trim()) {
+          return value.trim();
+        }
+      }
+    }
+    return "this product";
+  }
+
   // --- uuid extraction --------------------------------------------------
   // Ground truth for the exact route shape inside the marketplace iframe is
   // unknown at write time. We try a plausible uuid regex against the full
@@ -37,10 +67,17 @@
   // Classification logic lives in src/classify.ts (compiled to
   // extension/lib/classify.js) since it is covered by unit tests. This is a
   // plain content script with no ESM imports, so it delegates to the
-  // service worker via messaging instead of duplicating the logic here.
+  // service worker via messaging instead of duplicating the logic here. The
+  // service worker also derives the destination tenant (via deriveOrigins)
+  // from the origin we send it, so this script doesn't have to duplicate
+  // hostname parsing to show it in the confirmation dialog.
   async function classifyViaBackground(detail) {
     try {
-      return await chrome.runtime.sendMessage({ type: "classify", detail: detail });
+      return await chrome.runtime.sendMessage({
+        type: "classify",
+        detail: detail,
+        origin: location.origin,
+      });
     } catch (err) {
       console.log(
         "[import-to-tenant] classify message failed: %s",
@@ -50,6 +87,8 @@
     }
   }
 
+  // Returns { kind, tenant, pcloudOrigin, productName } for an importable
+  // product, or null (fail closed) if it isn't one.
   async function checkProductKind(uuid) {
     var url = "/api/integrations/" + encodeURIComponent(uuid);
     var res;
@@ -89,20 +128,29 @@
       );
     }
 
-    var kind = await classifyViaBackground(detail);
+    var classification = await classifyViaBackground(detail);
+    var kind = classification && classification.kind;
+
     if (!kind) {
       console.log(
         "[import-to-tenant] product %s did not classify to an importable kind; not injecting button (fail closed).",
         uuid
       );
-    } else {
-      console.log(
-        "[import-to-tenant] product %s classified as: %s",
-        uuid,
-        kind
-      );
+      return null;
     }
-    return kind;
+
+    console.log(
+      "[import-to-tenant] product %s classified as: %s",
+      uuid,
+      kind
+    );
+
+    return {
+      kind: kind,
+      tenant: classification.tenant,
+      pcloudOrigin: classification.pcloudOrigin,
+      productName: getProductName(detail),
+    };
   }
 
   // --- download url extraction --------------------------------------------
@@ -150,7 +198,7 @@
     return !!document.getElementById(BTN_ID);
   }
 
-  function makeImportButton(downloadBtn, uuid, kind) {
+  function makeImportButton(downloadBtn, uuid, classification) {
     var btn = document.createElement("button");
     btn.id = BTN_ID;
     btn.setAttribute("data-import-to-tenant-btn", "true");
@@ -159,10 +207,187 @@
     btn.textContent = "Import to tenant";
 
     btn.addEventListener("click", function () {
-      handleImportClick(btn, uuid, kind);
+      openConfirmDialog(btn, uuid, classification);
     });
 
     return btn;
+  }
+
+  // --- confirmation dialog -------------------------------------------------
+  // Plain DOM built in the ISOLATED world, styled inline so it can't collide
+  // with the host page's CSS. Deliberately not window.confirm/alert/prompt:
+  // those block the page's event loop, can't show structure, and look like
+  // a browser error rather than part of the product.
+  function openConfirmDialog(triggerBtn, uuid, classification) {
+    if (dialogOpen) return;
+    dialogOpen = true;
+
+    var kindLabel = KIND_LABELS[classification.kind] || classification.kind;
+    var tenant = classification.tenant || "(unknown tenant)";
+    var pcloudHost = classification.pcloudOrigin
+      ? classification.pcloudOrigin.replace(/^https?:\/\//, "")
+      : "(unknown host)";
+    var titleId = DIALOG_PREFIX + "-title";
+
+    var overlay = document.createElement("div");
+    overlay.id = DIALOG_PREFIX + "-overlay";
+    overlay.style.cssText = [
+      "position:fixed",
+      "inset:0",
+      "background:rgba(0,0,0,0.5)",
+      "display:flex",
+      "align-items:center",
+      "justify-content:center",
+      "z-index:2147483647",
+    ].join(";");
+
+    var dialog = document.createElement("div");
+    dialog.id = DIALOG_PREFIX;
+    dialog.setAttribute("role", "dialog");
+    dialog.setAttribute("aria-modal", "true");
+    dialog.setAttribute("aria-labelledby", titleId);
+    dialog.style.cssText = [
+      "background:#ffffff",
+      "color:#1a1a1a",
+      "border-radius:8px",
+      "padding:24px",
+      "max-width:420px",
+      "width:90%",
+      "box-shadow:0 8px 32px rgba(0,0,0,0.35)",
+      "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif",
+      "box-sizing:border-box",
+    ].join(";");
+
+    var title = document.createElement("h2");
+    title.id = titleId;
+    title.textContent = "Import to Idira Privilege Cloud";
+    title.style.cssText = "margin:0 0 16px;font-size:16px;font-weight:600;line-height:1.3;";
+
+    var productLine = document.createElement("p");
+    productLine.style.cssText = "margin:0 0 4px;font-size:14px;font-weight:600;";
+    productLine.textContent = classification.productName;
+
+    var kindLine = document.createElement("p");
+    kindLine.style.cssText = "margin:0 0 16px;font-size:13px;color:#555;";
+    kindLine.textContent = kindLabel;
+
+    var tenantLabel = document.createElement("p");
+    tenantLabel.style.cssText = "margin:0 0 2px;font-size:12px;color:#555;";
+    tenantLabel.textContent = "Destination tenant:";
+
+    var tenantValue = document.createElement("p");
+    tenantValue.style.cssText = "margin:0 0 4px;font-size:20px;font-weight:700;word-break:break-word;";
+    tenantValue.textContent = tenant;
+
+    var hostValue = document.createElement("p");
+    hostValue.style.cssText = [
+      "margin:0 0 20px",
+      "font-size:12px",
+      "font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace",
+      "color:#666",
+      "word-break:break-all",
+    ].join(";");
+    hostValue.textContent = pcloudHost;
+
+    var btnRow = document.createElement("div");
+    btnRow.style.cssText = "display:flex;justify-content:flex-end;gap:8px;";
+
+    var cancelBtn = document.createElement("button");
+    cancelBtn.type = "button";
+    cancelBtn.id = DIALOG_PREFIX + "-cancel";
+    cancelBtn.textContent = "Cancel";
+    cancelBtn.style.cssText = [
+      "padding:8px 16px",
+      "border-radius:4px",
+      "border:1px solid #ccc",
+      "background:#f5f5f5",
+      "color:#1a1a1a",
+      "cursor:pointer",
+      "font-size:14px",
+    ].join(";");
+
+    var importBtn = document.createElement("button");
+    importBtn.type = "button";
+    importBtn.id = DIALOG_PREFIX + "-import";
+    importBtn.textContent = "Import";
+    importBtn.style.cssText = [
+      "padding:8px 16px",
+      "border-radius:4px",
+      "border:1px solid #0b5fff",
+      "background:#0b5fff",
+      "color:#ffffff",
+      "cursor:pointer",
+      "font-size:14px",
+    ].join(";");
+
+    btnRow.appendChild(cancelBtn);
+    btnRow.appendChild(importBtn);
+
+    dialog.appendChild(title);
+    dialog.appendChild(productLine);
+    dialog.appendChild(kindLine);
+    dialog.appendChild(tenantLabel);
+    dialog.appendChild(tenantValue);
+    dialog.appendChild(hostValue);
+    dialog.appendChild(btnRow);
+
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+
+    function close() {
+      document.removeEventListener("keydown", onKeydown, true);
+      if (overlay.parentNode) {
+        overlay.parentNode.removeChild(overlay);
+      }
+      dialogOpen = false;
+      if (typeof triggerBtn.focus === "function") {
+        triggerBtn.focus();
+      }
+    }
+
+    function onCancel() {
+      close();
+    }
+
+    function onImport() {
+      close();
+      handleImportClick(triggerBtn, uuid, classification.kind);
+    }
+
+    // Simple two-button focus trap: the only focusable elements in the
+    // dialog are Cancel and Import, so just wrap Tab/Shift+Tab between them.
+    function onKeydown(ev) {
+      if (ev.key === "Escape") {
+        ev.preventDefault();
+        onCancel();
+        return;
+      }
+      if (ev.key === "Tab") {
+        if (ev.shiftKey) {
+          if (document.activeElement === cancelBtn) {
+            ev.preventDefault();
+            importBtn.focus();
+          }
+        } else {
+          if (document.activeElement === importBtn) {
+            ev.preventDefault();
+            cancelBtn.focus();
+          }
+        }
+      }
+    }
+
+    overlay.addEventListener("click", function (ev) {
+      if (ev.target === overlay) {
+        onCancel();
+      }
+    });
+
+    cancelBtn.addEventListener("click", onCancel);
+    importBtn.addEventListener("click", onImport);
+    document.addEventListener("keydown", onKeydown, true);
+
+    cancelBtn.focus();
   }
 
   async function handleImportClick(btn, uuidAtClickTime, kind) {
@@ -206,6 +431,7 @@
 
   // --- orchestration --------------------------------------------------------
   async function tryInject() {
+    if (dialogOpen) return;
     if (buttonPresent()) return;
 
     var uuid = getCurrentUuid();
@@ -219,15 +445,17 @@
       return; // Download button not on screen right now; nothing to anchor to.
     }
 
-    var kind = await checkProductKind(uuid);
-    if (!kind) return;
+    var classification = await checkProductKind(uuid);
+    if (!classification) return;
 
-    // Re-check after the await in case the SPA re-rendered or route changed.
+    // Re-check after the await in case the SPA re-rendered, the route
+    // changed, or the confirmation dialog was opened in the meantime.
+    if (dialogOpen) return;
     if (buttonPresent()) return;
     downloadBtn = findDownloadButton();
     if (!downloadBtn) return;
 
-    var importBtn = makeImportButton(downloadBtn, uuid, kind);
+    var importBtn = makeImportButton(downloadBtn, uuid, classification);
     downloadBtn.insertAdjacentElement("afterend", importBtn);
   }
 
