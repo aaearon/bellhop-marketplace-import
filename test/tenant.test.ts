@@ -4,7 +4,7 @@ import { deriveOrigins, InvalidTenantUrlError } from "../src/tenant.js";
 const expected = {
   tenant: "acme-poc",
   shellOrigin: "https://acme-poc.cyberark.cloud",
-  marketplaceOrigin: "https://acme-poc-managespace.cyberark.cloud",
+  marketplaceOrigin: "https://acme-poc-marketplace.cyberark.cloud",
   pcloudOrigin: "https://acme-poc-pcloud.cyberark.cloud",
   pcloudApiBase: "https://acme-poc-pcloud.cyberark.cloud/PasswordVault/API",
 };
@@ -53,5 +53,35 @@ describe("deriveOrigins", () => {
 
   it("9. rejects a bare host with no tenant segment", () => {
     expect(() => deriveOrigins("https://cyberark.cloud/")).toThrow(InvalidTenantUrlError);
+  });
+
+  it("10. derives origins from the marketplace host (content script's actual origin)", () => {
+    const result = deriveOrigins(
+      "https://acme-poc-marketplace.cyberark.cloud/#/marketplace/product-info/19fa7d61-e550-45a5-88a3-7b2ace0b8f53"
+    );
+    expect(result).toEqual(expected);
+  });
+
+  it("11. does not mangle a tenant whose name contains '-pcloud' mid-string, not as a true suffix", () => {
+    // "foo-pcloud-test" ends with "-test", not "-pcloud" -- the env suffix
+    // check must be anchored to the true end of the label.
+    const result = deriveOrigins("https://foo-pcloud-test.cyberark.cloud/");
+    expect(result.tenant).toBe("foo-pcloud-test");
+    expect(result.pcloudApiBase).toBe(
+      "https://foo-pcloud-test-pcloud.cyberark.cloud/PasswordVault/API"
+    );
+  });
+
+  it("12. correctly strips the '-pcloud' suffix for the pcloud host of a tenant containing '-pcloud' in its name", () => {
+    // The pcloud-environment host for tenant "foo-pcloud-test" is
+    // "foo-pcloud-test-pcloud.cyberark.cloud" -- the trailing "-pcloud" here
+    // IS the true env suffix and must be stripped, leaving the tenant intact.
+    const result = deriveOrigins("https://foo-pcloud-test-pcloud.cyberark.cloud/");
+    expect(result.tenant).toBe("foo-pcloud-test");
+  });
+
+  it("13. does not mangle a tenant whose name contains '-marketplace' mid-string, not as a true suffix", () => {
+    const result = deriveOrigins("https://foo-marketplace-test.cyberark.cloud/");
+    expect(result.tenant).toBe("foo-marketplace-test");
   });
 });

@@ -3,6 +3,14 @@
 // SECURITY: This script NEVER logs request/response bodies, NEVER logs
 // request/response headers, and NEVER logs cookie or storage values.
 // Only URLs, HTTP methods, and HTTP statuses are logged, via console.log.
+//
+// SECURITY: URLs are NOT inherently safe to log as-is either - this app
+// mints presigned AWS S3 URLs whose QUERY STRING carries a live credential
+// (X-Amz-Security-Token, X-Amz-Signature, X-Amz-Credential, etc). Every
+// logged URL is passed through redactUrl() below, which keeps the origin,
+// path, and query parameter NAMES but replaces query/fragment VALUES with
+// a redacted placeholder (see redactUrl for the narrow harmless-param
+// allowlist).
 
 (function () {
   if (window.__idiraRecon) {
@@ -29,6 +37,55 @@
   function hostMatches(host, suffix) {
     return host === suffix || (host.length > suffix.length &&
       host.slice(-(suffix.length + 1)) === '.' + suffix);
+  }
+
+  // Harmless, non-secret query params - kept verbatim for readability.
+  var URL_PARAM_KEEP_PATTERN = /^(v|version|page|size|limit|offset|sort|order|lang|locale|t)$/i;
+  // Always fully redacted, even if it happens to match the allowlist above.
+  var URL_PARAM_ALWAYS_REDACT_PATTERN = /token|sig|signature|credential|key|secret|password|auth|session/i;
+
+  // Redact a URL for logging: keeps origin + pathname + query parameter
+  // NAMES verbatim, but replaces every query/fragment VALUE with
+  // '<redacted:N>' (N = character length) - never the value itself. See the
+  // SECURITY comment at the top of this file for why this is mandatory on
+  // every log path, not just the sensitive-looking ones.
+  function redactUrl(rawUrl) {
+    try {
+      var parsed = new URL(rawUrl, location.href);
+      var query = '';
+      if (parsed.search) {
+        var params = new URLSearchParams(parsed.search);
+        var parts = [];
+        params.forEach(function (value, name) {
+          var keep = URL_PARAM_KEEP_PATTERN.test(name) &&
+            !URL_PARAM_ALWAYS_REDACT_PATTERN.test(name);
+          parts.push(encodeURIComponent(name) + '=' + (keep ?
+            encodeURIComponent(value) :
+            '<redacted:' + String(value).length + '>'));
+        });
+        if (parts.length) {
+          query = '?' + parts.join('&');
+        }
+      }
+      var fragment = '';
+      if (parsed.hash) {
+        var hashBody = parsed.hash.slice(1);
+        fragment = (hashBody.indexOf('=') === -1 && hashBody.indexOf('&') === -1) ?
+          parsed.hash :
+          '#<redacted>';
+      }
+      return parsed.origin + parsed.pathname + query + fragment;
+    } catch (e) {
+      // Parsing failed - fall back to the portion before the first '?',
+      // never the query string itself (that's where credentials live).
+      try {
+        var str = String(rawUrl);
+        var qIdx = str.indexOf('?');
+        return qIdx === -1 ? str : str.slice(0, qIdx);
+      } catch (e2) {
+        return '';
+      }
+    }
   }
 
   function shouldFilter(rawUrl) {
@@ -61,7 +118,7 @@
       console.log('[IDIRA-RECON]', JSON.stringify({
         frame: getFrameId(),
         method: method,
-        url: url,
+        url: redactUrl(url),
         status: status,
         type: type
       }));
@@ -74,7 +131,7 @@
   try {
     console.log('[IDIRA-FRAME]', JSON.stringify({
       origin: location.origin,
-      href: location.href,
+      href: redactUrl(location.href),
       isTop: window.top === window.self
     }));
   } catch (e) {

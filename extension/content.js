@@ -35,33 +35,16 @@
 
   // --- product detail / connection-component check ----------------------
   function isConnectionComponent(detail) {
-    // Shape of /api/integrations/<uuid> is not confirmed. Known real
-    // example: category "Idira platform & extensions", a PSM connection
-    // component. Try a few plausible fields/values defensively.
+    // The API exposes no explicit package-type field. Observed shape:
+    //   {hasArtifact: true, idiraServices: ["...","PRIVILEGE_CLOUD","PSM"], ...}
+    // `category` is NOT usable - it is "Data & database security" on one PSM
+    // connection component and "Idira platform & extensions" on another.
+    // Best available marker: a downloadable artifact plus PSM in idiraServices.
+    // This is a heuristic, not an authoritative type check.
     if (!detail || typeof detail !== "object") return false;
-
-    var candidates = [
-      detail.category,
-      detail.categoryName,
-      detail.type,
-      detail.componentType,
-      detail.integrationType,
-      detail.subType,
-    ];
-
-    for (var i = 0; i < candidates.length; i++) {
-      var v = candidates[i];
-      if (typeof v !== "string") continue;
-      var lower = v.toLowerCase();
-      if (
-        lower.indexOf("connection component") !== -1 ||
-        lower.indexOf("idira platform") !== -1 ||
-        lower === "psm"
-      ) {
-        return true;
-      }
-    }
-    return false;
+    if (detail.hasArtifact !== true) return false;
+    if (!Array.isArray(detail.idiraServices)) return false;
+    return detail.idiraServices.indexOf("PSM") !== -1;
   }
 
   async function checkProductIsConnectionComponent(uuid) {
@@ -97,9 +80,9 @@
     if (!loggedProductDetail) {
       loggedProductDetail = true;
       console.log(
-        "[import-to-tenant] /api/integrations/%s raw response:",
+        "[import-to-tenant] /api/integrations/%s raw response: %s",
         uuid,
-        detail
+        JSON.stringify(detail)
       );
     }
 
