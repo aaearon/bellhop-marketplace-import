@@ -17,12 +17,14 @@ export type OriginPattern = string;
 /** Every requestable S3 host must end with this. */
 export const S3_HOST_SUFFIX = ".amazonaws.com";
 
-/**
- * The bare apex, matched as an exact literal — never a regex, never a subdomain
- * wildcard. Needed only to read the parent-domain-scoped XSRF-TOKEN cookie; it
- * confers nothing on any tenant subdomain.
- */
-export const APEX_ORIGIN_PATTERN: OriginPattern = "https://cyberark.cloud/*";
+// The bare apex `https://cyberark.cloud/*` used to be requestable, purely so
+// `chrome.cookies` could read the parent-domain-scoped XSRF-TOKEN cookie —
+// Chrome gates cookie reads on the cookie's own domain scope, so the pcloud
+// grant alone was not enough. That token is not HttpOnly, so the content
+// script now reads it from `document.cookie` with no host permission at all,
+// and the apex is neither declared nor requested. There is deliberately no
+// rule below that any `cyberark.cloud` form other than a concrete
+// `<tenant>-pcloud` host can satisfy.
 
 /**
  * The per-tenant vault host. The `*` sits OUTSIDE the character class, so no
@@ -36,9 +38,66 @@ export const PCLOUD_ORIGIN_PATTERN_RE = /^https:\/\/[a-z0-9-]+-pcloud\.cyberark\
 // alone would let the wildcard declaration through.
 const CONCRETE_HOSTNAME_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/;
 
+// An S3 endpoint label. Anchored at both ends, so `s3cret` and `s3x` are not
+// S3 endpoint labels. Three families, and only these three:
+//   - `s3`                — the modern endpoint;
+//   - `s3-<something>`    — the legacy dash-region form (`s3-eu-west-2`) and
+//                           the access-point/object-lambda/control variants
+//                           (`s3-accesspoint`, `s3-object-lambda`);
+//   - `s3express-<az-id>` — S3 Express One Zone (`s3express-euw2-az1`), which
+//                           has no dash straight after `s3` and so is not
+//                           reachable by either form above.
+//
+// What is NOT covered, deliberately: any endpoint label that neither is `s3`
+// nor begins `s3-`/`s3express-`, and any partition other than the commercial
+// one — `amazonaws.com.cn` (China) and `c2s.ic.gov` fail the suffix check
+// earlier, not here. If AWS or the vendor moves the artifact bucket onto a
+// shape outside this list, the import fails CLOSED with a clear error rather
+// than silently granting the wrong host; recovering needs a code change.
+const S3_ENDPOINT_LABEL_RE = /^s3(express)?(-[a-z0-9-]+)?$/;
+
+/**
+ * True if `host` (already known to end in `.amazonaws.com`) is S3-shaped: an
+ * S3 endpoint label sits in a position an S3 endpoint actually occupies, with
+ * at least one bucket label in front of it.
+ *
+ * Position matters. Asking merely whether SOME label looked like an endpoint
+ * let a bucket name carry the whole check —
+ * `s3-backups.execute-api.eu-west-1.amazonaws.com` is an API Gateway host and
+ * passed. The endpoint label is either the last label before the suffix
+ * (`<bucket>.s3.amazonaws.com`) or the one before a single region label
+ * (`<bucket>.s3.<region>.amazonaws.com`), and nowhere else.
+ *
+ * Virtual-hosted style ONLY: index >= 1 requires a bucket label, which is what
+ * rejects the path-style endpoints `s3.amazonaws.com` and
+ * `s3.<region>.amazonaws.com`. Those hosts are shared by every bucket in the
+ * region, so a grant for one is a grant for all of them — far more than the
+ * artifact bucket. The marketplace's own presigned urls are virtual-hosted
+ * (see the recorded example in CLAUDE.md), so nothing is given up.
+ *
+ * Without the shape rule at all, a manipulated download url could win a host
+ * grant for `sts.amazonaws.com` or any other AWS service, since the only other
+ * rule is the `.amazonaws.com` suffix itself.
+ *
+ * Deliberately NOT mirrored in the manifest: `optional_host_permissions` stays
+ * the region-agnostic `https://*.amazonaws.com/*`. Chrome match patterns
+ * cannot express a partial subdomain wildcard anyway, and pinning a region
+ * there would re-create exactly the silent breakage the hardcoded bucket name
+ * caused. The narrowing belongs at request time, here.
+ */
+function isS3ShapedHost(host: string): boolean {
+  const labels = host.slice(0, -S3_HOST_SUFFIX.length).split(".");
+  // Last label before the suffix, then the one before a region label. Index
+  // must be >= 1: something has to be the bucket.
+  for (const index of [labels.length - 1, labels.length - 2]) {
+    if (index >= 1 && S3_ENDPOINT_LABEL_RE.test(labels[index]!)) return true;
+  }
+  return false;
+}
+
 /**
  * True only for a concrete, requestable artifact origin: exactly
- * `https://<host>` where `<host>` is a real hostname ending in
+ * `https://<host>` where `<host>` is a real, S3-shaped hostname ending in
  * `.amazonaws.com`, with no userinfo, no explicit port, no path/query/fragment
  * and no wildcard label.
  *
@@ -76,6 +135,8 @@ export function isValidS3Origin(value: unknown): boolean {
   // lookalikes `evil-amazonaws.com` and `amazonaws.com.evil.com`.
   if (!host.endsWith(S3_HOST_SUFFIX)) return false;
   if (host.length <= S3_HOST_SUFFIX.length) return false;
+  // ...and S3's, not any other AWS service's.
+  if (!isS3ShapedHost(host)) return false;
 
   return true;
 }
@@ -118,9 +179,5 @@ export function s3OriginPatternFromDownloadUrl(downloadUrl: unknown): OriginPatt
  */
 export function isAllowedOriginPattern(pattern: unknown): boolean {
   if (typeof pattern !== "string") return false;
-  return (
-    pattern === APEX_ORIGIN_PATTERN ||
-    PCLOUD_ORIGIN_PATTERN_RE.test(pattern) ||
-    isS3OriginPattern(pattern)
-  );
+  return PCLOUD_ORIGIN_PATTERN_RE.test(pattern) || isS3OriginPattern(pattern);
 }

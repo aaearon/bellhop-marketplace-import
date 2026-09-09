@@ -2,7 +2,7 @@
 
 import { deriveOrigins } from './lib/tenant.js';
 import { arrayBufferToBase64 } from './lib/base64.js';
-import { cookieDomains, findXsrfCookie, xsrfCandidateNames } from './lib/csrf.js';
+import { findXsrfCookie, xsrfCandidateNames } from './lib/csrf.js';
 import { classifyProduct, importPathFor, serviceDisplayNameFor } from './lib/classify.js';
 import { isAllowedOriginPattern, s3OriginPatternFromDownloadUrl } from './lib/origins.js';
 
@@ -37,6 +37,30 @@ function isValidKind(kind) {
 // mismatched allowlist.
 var MARKETPLACE_HOST_RE = /(^|\.)[a-z0-9-]+-marketplace\.cyberark\.cloud$/i;
 
+// The origin of the FRAME that sent the message, as CHROME reports it —
+// never a value the message body carries. This is the single source of the
+// destination tenant: every branch below derives the tenant from this, so a
+// content script cannot name a tenant other than the one it is running on,
+// and the tenant the confirmation dialog showed is necessarily the tenant the
+// import POST lands in.
+//
+// sender.origin is the direct answer where available; sender.url is the frame
+// url and carries the same origin for the older shape.
+//
+// Synchronous, like everything else on the permissionsRequest path (see the
+// note on isTrustedSender below).
+function senderOrigin(sender) {
+  if (!sender) return null;
+  var from =
+    typeof sender.origin === "string" && sender.origin ? sender.origin : sender.url;
+  if (typeof from !== "string" || !from) return null;
+  try {
+    return new URL(from).origin;
+  } catch (err) {
+    return null;
+  }
+}
+
 // Synchronous by construction — a property read, a URL parse and a regex, no
 // await and no promise hop — because the permissionsRequest branch below runs
 // inside the interaction scope Chromium wraps around this dispatch, and any
@@ -49,12 +73,8 @@ function isTrustedSender(sender) {
   // Our own extension, not another one. Lenient if the id is absent rather
   // than mismatched, since only same-extension messages arrive here at all.
   if (sender.id && sender.id !== chrome.runtime.id) return false;
-  // The origin of the FRAME that sent the message. sender.origin is the direct
-  // answer where available; sender.url is the frame url and carries the same
-  // origin for the older shape.
-  var from =
-    typeof sender.origin === "string" && sender.origin ? sender.origin : sender.url;
-  if (typeof from !== "string" || !from) return false;
+  var from = senderOrigin(sender);
+  if (!from) return false;
   try {
     var u = new URL(from);
     return u.protocol === "https:" && MARKETPLACE_HOST_RE.test(u.hostname);
@@ -72,22 +92,34 @@ function isTrustedSender(sender) {
 // optional_host_permissions declares — `https://*.cyberark.cloud/*` (every
 // tenant at once) or `https://*.amazonaws.com/*` (every AWS-hosted origin).
 //
-// The artifact origin is NOT supplied by the caller. The service worker
-// derives it HERE, from the same download url it is itself about to fetch, so
-// there is one source of truth and a hostile content script cannot talk the
-// worker into requesting a grant for an attacker-chosen host by simply
-// asserting "trust this origin".
+// NEITHER origin is supplied by the caller. The worker derives the tenant's
+// pcloud host from sender.origin and the artifact host from the same download
+// url it is itself about to fetch, so each has one source of truth and a
+// hostile content script cannot talk the worker into requesting a grant for a
+// host of its choosing by simply asserting "trust this origin".
+//
+// Two origins, not three: the bare cyberark.cloud apex used to be requested so
+// chrome.cookies could read the parent-domain-scoped XSRF-TOKEN cookie. That
+// cookie is not HttpOnly, so the content script reads it from document.cookie
+// and neither the apex nor the `cookies` permission exists any more.
 //
 // Synchronous by construction: this runs before request(), while the user
-// activation carried across the sendMessage hop is still live.
-function originsToRequest(baseOrigins, downloadUrl) {
-  var origins = Array.isArray(baseOrigins) ? baseOrigins.slice() : [];
+// activation carried across the sendMessage hop is still live. deriveOrigins
+// is pure string/URL work, so it costs nothing here.
+function originsToRequest(sender, downloadUrl) {
+  var tenantOrigins;
+  try {
+    tenantOrigins = deriveOrigins(senderOrigin(sender));
+  } catch (err) {
+    return { ok: false, error: "could not derive a tenant from the sender origin" };
+  }
 
   var s3Pattern = s3OriginPatternFromDownloadUrl(downloadUrl);
   if (!s3Pattern) {
     return { ok: false, error: "invalid or missing artifact download url" };
   }
-  origins.push(s3Pattern);
+
+  var origins = [tenantOrigins.pcloudOrigin + "/*", s3Pattern];
 
   if (!origins.every(isAllowedOriginPattern)) {
     return { ok: false, error: "unexpected origin requested" };
@@ -96,9 +128,8 @@ function originsToRequest(baseOrigins, downloadUrl) {
   return { ok: true, origins: origins };
 }
 
-async function handleImport(msg) {
+async function handleImport(msg, sender) {
   var downloadUrl = msg.downloadUrl;
-  var origin = msg.origin;
   var kind = msg.kind;
 
   if (!isValidKind(kind)) {
@@ -149,68 +180,74 @@ async function handleImport(msg) {
 
   var b64 = arrayBufferToBase64(buf);
 
-  var origins = deriveOrigins(origin);
+  // The destination comes from sender.origin, so it is the tenant whose page
+  // sent the message and the tenant the confirmation dialog named — not a
+  // tenant the message body could have chosen.
+  var origins = deriveOrigins(senderOrigin(sender));
   var importUrl = origins.pcloudApiBase + importPathFor(kind);
 
   // Double-submit CSRF: the tenant sets an XSRF-TOKEN-<guid> cookie whose
-  // value must be echoed back in a header. Query by `url` so we get exactly
-  // the cookies that would be sent to the pcloud origin (the SSO cookie may
-  // be scoped to .cyberark.cloud rather than the pcloud host).
-  var cookies = await chrome.cookies.getAll({ url: origins.pcloudOrigin });
-
-  // Pass the pcloud HOSTNAME (not the origin url) as targetHost so
-  // findXsrfCookie can rank candidates by domain specificity — a partner may
-  // be signed in to several tenants at once, so a bare .cyberark.cloud token
-  // must lose to a host-scoped one, and an unrelated tenant's token must be
-  // excluded outright.
-  var pcloudHost = new URL(origins.pcloudOrigin).hostname;
-  var xsrf = findXsrfCookie(cookies, pcloudHost);
+  // value must be echoed back in a header. That cookie is not HttpOnly and is
+  // scoped to the shared .cyberark.cloud parent domain, so the content script
+  // reads it out of document.cookie and sends the XSRF-shaped candidates on
+  // this message. The worker holds no `cookies` permission and makes no
+  // chrome.cookies call.
+  //
+  // findXsrfCookie selects exactly one candidate or returns null. document.cookie
+  // exposes no domain field, so there is nothing to rank candidates by — more
+  // than one candidate may belong to different tenants, so ambiguity fails
+  // closed rather than guessing. The content script's own name filter is only a
+  // prefix test; the authoritative XSRF-TOKEN-<guid> match is this call.
+  // Element shape is validated, not just the array: findXsrfCookie reads
+  // `.name` off every element, so one null or malformed entry would throw a
+  // TypeError and surface as a generic unexpected error instead of the
+  // fail-closed CSRF message below. Every other field on this message is
+  // validated; this one is too.
+  var candidates = (Array.isArray(msg.xsrfCookies) ? msg.xsrfCookies : []).filter(function (c) {
+    return c && typeof c.name === "string" && typeof c.value === "string";
+  });
+  var xsrf = findXsrfCookie(candidates);
 
   if (!xsrf) {
-    // Names and domains only, and only XSRF-shaped NAMES: this shows what was
-    // rejected without printing unrelated cookie names (e.g. SSO tokens).
-    // Never log a cookie VALUE. The cookie count and the distinct domains are
-    // what distinguish the two failures that look identical from the outside:
-    // "the cookie is not readable at this permission scope" (0 cookies, or
-    // only host-scoped ones) vs "it is readable but no candidate matched".
-    // Terse on purpose — this string is surfaced in the button label, which
-    // truncates at 120 chars; the full target origin goes to the console only.
-    var names = xsrfCandidateNames(cookies).join(", ") || "none";
-    var domains = cookieDomains(cookies).join(", ") || "none";
+    // COUNTS only in the returned message, and names to the console only. The
+    // cookie name carries the tenant session guid — the same reason the
+    // X-<cookie name> header was dropped — and this string is rendered into
+    // the button label, on a page the vendor's own SPA also occupies. The
+    // diagnostic keeps its value either way: the two counts separate the
+    // failures that look identical from the outside — nothing XSRF-shaped
+    // reached us at all (the cookie is HttpOnly now, or host-scoped to pcloud
+    // and invisible to that frame) vs. candidates arrived but none matched the
+    // guid shape, or several did and it failed closed. Terse on purpose — the
+    // label truncates at 120 chars.
+    var names = xsrfCandidateNames(candidates);
     var noTokenMsg =
-      "no usable XSRF-TOKEN cookie: " + cookies.length +
-      " cookies, domains " + domains +
-      ", XSRF-shaped: " + names;
-    console.log("[bellhop] %s (target %s)", noTokenMsg, origins.pcloudOrigin);
+      "no usable XSRF-TOKEN cookie: " + candidates.length +
+      " readable from the page, " + names.length + " guid-shaped";
+    console.log(
+      "[bellhop] %s (guid-shaped names: %s, target %s)",
+      noTokenMsg,
+      names.join(", ") || "none",
+      origins.pcloudOrigin
+    );
     return { ok: false, status: 0, body: noTokenMsg, error: noTokenMsg };
   }
 
-  // Console only, never surfaced in the UI, and NEVER the value: records the
-  // real-world scope of the token cookie so the permission model above stays
-  // grounded in observation rather than inference. Matched on name+value so
-  // the domain reported is the scope of the cookie actually selected, even if
-  // the same name exists at two scopes.
-  var selected = cookies.filter(function (c) {
-    return c.name === xsrf.name && c.value === xsrf.value;
-  })[0];
-  console.log(
-    "[bellhop] csrf cookie selected: name=%s domain=%s",
-    xsrf.name,
-    (selected && selected.domain) || "(unknown)"
-  );
+  // Console only, never surfaced in the UI, and NEVER the value.
+  console.log("[bellhop] csrf cookie selected: name=%s", xsrf.name);
 
-  // The exact header name is NOT confirmed. Both conventional forms are sent:
-  // an extra unrecognised header is harmless, a missing one fails the request.
-  // Narrow this to the single correct header once observed.
+  // X-XSRF-TOKEN, and only it. Confirmed against a live tenant by probing a
+  // nonexistent path (CSRF middleware runs ahead of routing, so this was safe
+  // and decisive): no header -> 400 CSRF validation failed; X-XSRF-TOKEN alone
+  // -> 404, i.e. CSRF passed; X-<cookie name> alone -> 400. The second header
+  // this used to send was both useless and a leak — the cookie name carries
+  // the session guid.
   var headers = { "Content-Type": "application/json" };
   headers["X-XSRF-TOKEN"] = xsrf.value;
-  headers["X-" + xsrf.name] = xsrf.value;
 
   console.log(
-    "[bellhop] posting import to: %s (csrf cookie=%s, headers sent=%s)",
+    "[bellhop] posting import to: %s (csrf cookie=%s)",
     importUrl,
-    xsrf.name,
-    "X-XSRF-TOKEN, X-" + xsrf.name
+    xsrf.name
   );
 
   var importRes;
@@ -270,13 +307,12 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
   // listener and calling request(); the origin validation below is synchronous
   // for exactly that reason, and request() is used in its callback form.
   if (message.type === "permissionsRequest") {
-    var plan = originsToRequest(message.origins, message.downloadUrl);
+    var plan = originsToRequest(sender, message.downloadUrl);
 
     if (!plan.ok || plan.origins.length === 0) {
       console.log(
-        "[bellhop] refusing permissions.request (%s) for: %s",
-        plan.error || "empty origin set",
-        JSON.stringify(message.origins)
+        "[bellhop] refusing permissions.request: %s",
+        plan.error || "empty origin set"
       );
       sendResponse({ ok: false, error: plan.error || "unexpected origin requested" });
       return false;
@@ -313,11 +349,12 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
 
     // Also derive the destination tenant identity so the content script
     // doesn't have to duplicate hostname parsing to show it in the
-    // confirmation dialog.
+    // confirmation dialog. From sender.origin, not from the message: the
+    // tenant the dialog names must be the tenant the import lands in.
     var tenant = null;
     var pcloudOrigin = null;
     try {
-      var origins = deriveOrigins(message.origin);
+      var origins = deriveOrigins(senderOrigin(sender));
       tenant = origins.tenant;
       pcloudOrigin = origins.pcloudOrigin;
     } catch (err) {
@@ -346,7 +383,7 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
     // checked here must be exactly the set that would be requested, or an
     // "already granted" answer would let the import proceed without the
     // artifact origin.
-    var containsPlan = originsToRequest(message.origins, message.downloadUrl);
+    var containsPlan = originsToRequest(sender, message.downloadUrl);
     if (!containsPlan.ok || containsPlan.origins.length === 0) {
       sendResponse({ ok: false });
       return false;
@@ -367,7 +404,7 @@ chrome.runtime.onMessage.addListener(function (message, sender, sendResponse) {
   }
 
   if (message.type === "import") {
-    handleImport(message)
+    handleImport(message, sender)
       .catch(function (err) {
         var errMsg = err && err.message ? err.message : String(err);
         console.log("[bellhop] unexpected error:", errMsg);

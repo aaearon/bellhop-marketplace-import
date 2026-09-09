@@ -42,7 +42,8 @@ Privilege Cloud). One SSO session and cookie namespace spans all of them.
 That is why this extension can move an artifact from Marketplace to
 Privilege Cloud using a session the user already holds, and why the CSRF
 token cookie is scoped to the `.cyberark.cloud` parent domain rather than to
-any single service host (see Auth).
+any single service host — which is what lets the marketplace frame read it
+(see Auth).
 
 ## Architecture
 
@@ -51,10 +52,12 @@ content script (marketplace iframe)
   -> GET /api/downloads/integrations/<uuid>   (same-origin, cookies)
      ^ at CONFIRMATION-DIALOG OPEN, not on the Import click (see Sequencing)
   -> presigned S3 url, cached for the click
+  -> read XSRF-TOKEN-<guid> from document.cookie (not HttpOnly)
   -> chrome.runtime.sendMessage
 service worker
+  -> destination tenant from sender.origin, never from the message body
   -> derive + validate artifact origin from that url (src/origins.ts)
-  -> chrome.permissions.request() for the derived origin
+  -> chrome.permissions.request() for the two derived origins
   -> fetch S3 bytes                            (CORS-exempt, no cookies)
   -> arrayBufferToBase64
   -> POST <t>-pcloud.cyberark.cloud/.../{ConnectionComponents,Platforms}/Import  (cookies)
@@ -136,54 +139,58 @@ forwarding it.
 
 ## Permissions
 
-The extension installs with **no host access and no cookie reach**.
-`extension/manifest.json` declares every host pattern under
-`optional_host_permissions`, never `host_permissions`. `"permissions":
-["cookies"]` stays declared but is inert on its own: `chrome.cookies` can
-only reach hosts the extension currently holds a host permission for, so
-narrowing host permissions transitively narrows cookie reach.
+The extension declares **zero API permissions** — `extension/manifest.json`
+has no `"permissions"` key at all — and installs with **no host access**.
+Every host pattern is declared under `optional_host_permissions`, never
+`host_permissions`.
+
+`"permissions": ["cookies"]` used to be declared. It is gone: the CSRF token
+cookie is not HttpOnly, so the content script reads it from `document.cookie`
+and no extension cookie API is involved anywhere (see Auth).
 
 `optional_host_permissions` is the *declaration* of what may ever be asked
-for, not what is held. It lists exactly three patterns, **all** of which are
+for, not what is held. It lists exactly two patterns, **both** of which are
 declarations only:
 
 - `https://*.cyberark.cloud/*` — the only way to declare a per-tenant pcloud
   host, since the tenant name is unknown until runtime.
-- `https://cyberark.cloud/*` — the apex.
 - `https://*.amazonaws.com/*` — the artifact bucket, whose name is likewise
   unknown until runtime (see Artifact origin below).
 
 What is actually **requested**, and therefore ever granted, is the narrow
-three-origin set below. Neither wildcard is ever requested, and the service
+two-origin set below. Neither wildcard is ever requested, and the service
 worker refuses to request either.
 
 This matters because the extension talks to services of a security platform
-tenant. `*.cyberark.cloud` + `cookies` as a standing install-time grant means read
-access to the session cookie of every customer tenant a partner is signed in
-to, forever. Optional permissions make that grant per-tenant, explicit, and
-revocable.
+tenant. `*.cyberark.cloud` as a standing install-time grant means reach into
+every customer tenant a partner is signed in to, forever. Optional
+permissions make that grant per-tenant, explicit, and revocable.
 
 `content_scripts.matches` is unaffected and stays broad: a declared content
 script runs without any host permission, and its same-origin fetches
-(`/api/integrations/...`, `/api/downloads/integrations/...`) need none
-either. Only the service worker's cross-origin fetches and `chrome.cookies`
-need host access, and both happen after a user click.
+(`/api/integrations/...`, `/api/downloads/integrations/...`) and its
+`document.cookie` read need none either. Only the service worker's two
+cross-origin fetches need host access, and both happen after a user click.
 
-The dialog's Import button requests **exactly three** origins, never a
-wildcard (`requiredOriginPatterns` in `extension/content.js`):
+The dialog's Import button requests **exactly two** origins, never a wildcard,
+and the content script names **neither** of them (`originsToRequest` in
+`extension/background.js`):
 
-1. `https://<t>-pcloud.cyberark.cloud/*` — the tenant's vault host, built from
-   the `pcloudOrigin` the classify response already returns. Carries the import
+1. `https://<t>-pcloud.cyberark.cloud/*` — the tenant's vault host, built by
+   the worker from `sender.origin` via `deriveOrigins`. Carries the import
    POST.
-2. `https://cyberark.cloud/*` — the bare apex, no subdomain wildcard. Required
-   only to read the CSRF cookie, which is parent-domain scoped (see Auth). It
-   confers nothing on any tenant subdomain: `cyberark.cloud` itself hosts no
-   tenant.
-3. The artifact origin — derived at runtime by the service worker from the
+2. The artifact origin — derived at runtime by the service worker from the
    presigned download url (see Artifact origin). Carries the artifact fetch.
 
-`chrome.permissions.contains()` runs first over all three, so a repeat import
-into an already-granted tenant does not re-prompt. Decline or error fails closed:
+Deriving both in the worker, from values the worker can verify, is the point:
+`sender.origin` is Chrome's report of which frame sent the message, so a
+compromised content script on tenant A's page cannot name tenant B, and the
+tenant the confirmation dialog showed is necessarily the tenant the POST lands
+in. The content script passes only the download url, which the worker
+validates and then fetches itself.
+
+`chrome.permissions.contains()` runs first over both, so a repeat import into
+an already-granted tenant does not re-prompt. Decline or error fails closed:
 the button reads `Failed: permission not granted` and nothing else is tried.
 
 `chrome.permissions` is a `privileged_extension`-context API (Chromium
@@ -222,15 +229,14 @@ only the *synchronous* dispatch, so:
   synchronous for the same reason — it is pure string/URL work, no I/O.
 
 The requested origins are validated in the service worker before `request()` is
-called (`isAllowedOriginPattern`, `src/origins.ts`): each pattern must be
-exactly the literal `https://cyberark.cloud/*`, match
-`/^https:\/\/[a-z0-9-]+-pcloud\.cyberark\.cloud\/\*$/` (the `*` sits outside
-the character class so no host-wildcard pattern matches), or pass the strict
-artifact-origin validator below. The apex is an exact string comparison, not a
-pattern — there is deliberately no rule that any `*.cyberark.cloud` form could
-satisfy. Anything else is refused with `unexpected origin requested` and
-`request()` is never reached. This keeps a buggy or compromised caller from
-using the extension to solicit either wildcard that
+called (`isAllowedOriginPattern`, `src/origins.ts`): each pattern must either
+match `/^https:\/\/[a-z0-9-]+-pcloud\.cyberark\.cloud\/\*$/` (the `*` sits
+outside the character class so no host-wildcard pattern matches) or pass the
+strict artifact-origin validator below. There is deliberately no rule that any
+other `cyberark.cloud` form could satisfy — the bare apex included, now that
+nothing needs it. Anything else is refused with `unexpected origin requested`
+and `request()` is never reached. This keeps a buggy or compromised caller
+from using the extension to solicit either wildcard that
 `optional_host_permissions` declares — every tenant at once, or every
 AWS-hosted origin at once.
 
@@ -247,7 +253,8 @@ out per import.
 **The service worker derives it itself**, in `originsToRequest`
 (`extension/background.js`), from the presigned download url it is about to
 fetch — the same url, one source of truth. It deliberately does not accept an
-origin passed to it by the content script: otherwise a compromised content
+origin passed to it by the content script (nothing does — the pcloud origin
+comes from `sender.origin` for the same reason): otherwise a compromised content
 script could talk the worker into requesting a grant for an attacker-chosen
 host just by asserting "trust this origin". `handleImport` re-runs the same
 derivation before fetching, so the origin fetched is the origin that was
@@ -259,6 +266,33 @@ A requestable artifact origin must be exactly `https://<host>` where `<host>`:
 
 - ends with `.amazonaws.com` and has at least one real label in front — this
   is what rejects `evil-amazonaws.com` and `amazonaws.com.evil.com`;
+- is **S3-shaped, virtual-hosted style**: an S3 endpoint label sits where an S3
+  endpoint actually sits — the last label before the suffix, or the one before
+  a single region label — with at least one **bucket** label in front of it.
+  So `bucket.s3.amazonaws.com`, `bucket.s3.<region>.amazonaws.com`, the legacy
+  `bucket.s3-<region>.amazonaws.com`, the access-point/object-lambda variants
+  and S3 Express One Zone (`…--x-s3.s3express-<az>.<region>.amazonaws.com`)
+  all pass. Three things are rejected that a looser rule let through:
+  - the suffix check alone accepted *any* AWS-hosted origin, so a manipulated
+    download url could have won a grant for `sts.amazonaws.com` or anything
+    else on that suffix;
+  - an *unanchored* "some label looks like `s3`" check let the bucket name
+    carry it: `s3-backups.execute-api.eu-west-1.amazonaws.com` is an API
+    Gateway host and passed. Position is now checked;
+  - **path-style endpoints** (`s3.amazonaws.com`, `s3.<region>.amazonaws.com`)
+    are rejected outright. That host is shared by every bucket in the region,
+    so granting it grants all of them. The marketplace's recorded url is
+    virtual-hosted, so nothing is given up.
+
+  The endpoint label regex is `^s3(express)?(-[a-z0-9-]+)?$` — anchored at both
+  ends, so `s3cret.amazonaws.com` and `bucket.s3x...` do not match. Anything
+  outside those three families, and any partition other than the commercial one
+  (`amazonaws.com.cn`), is **not** covered and fails closed with a clear error;
+  the JSDoc on `S3_ENDPOINT_LABEL_RE` says so explicitly rather than claiming
+  full coverage. This is a **validator** rule only: the manifest declaration
+  stays the region-agnostic `https://*.amazonaws.com/*`, because pinning a
+  region there would re-create exactly the silent breakage the hardcoded bucket
+  name caused;
 - matches a concrete-hostname regex, which is what rejects the wildcard
   `https://*.amazonaws.com` itself. **This matters:** `*` is not a forbidden
   host code point, so `new URL()` alone keeps it in `hostname` and the
@@ -386,52 +420,84 @@ missing.
 
 CSRF is required, and `src/csrf.ts` is wired into `extension/background.js`.
 
-**The token cookie is parent-domain scoped.** Shell, marketplace and pcloud
-are services of one platform tenant sharing a single SSO session, so
-`XSRF-TOKEN-<guid>` is set on the shared `.cyberark.cloud` parent domain —
-not a host-only cookie on `<t>-pcloud.cyberark.cloud`.
+**The token cookie is not HttpOnly, and it is parent-domain scoped.** Both
+observed against a live tenant, and the whole design below rests on them.
+Shell, marketplace and pcloud are services of one platform tenant sharing a
+single SSO session, so `XSRF-TOKEN-<guid>` is set on the shared
+`.cyberark.cloud` parent domain — not host-only on
+`<t>-pcloud.cyberark.cloud` — and it carries no `HttpOnly` flag. The content
+script already running in the marketplace iframe therefore sees it in
+`document.cookie`, with no host permission of any kind.
+
+So it reads it there (`readXsrfCookies`, `extension/content.js`) and sends the
+XSRF-shaped candidates on the existing `import` message. There is no
+`chrome.cookies` call anywhere, the `cookies` permission is not declared, and
+the bare `https://cyberark.cloud/*` apex is neither declared nor requested.
+
+The apex used to be in the requested set for exactly one reason:
 `chrome.cookies` gates read access on the **cookie's own domain scope**, not
-on the url passed to `getAll()`: for a `.cyberark.cloud` cookie Chrome checks
-the extension's permission against `https://cyberark.cloud/`, which a grant of
-the exact pcloud origin does not match. Granting only the pcloud origin
-therefore returns zero candidates and the import fails at the CSRF step, even
-though the browser itself happily sends that cookie to the pcloud host. This
-is why `https://cyberark.cloud/*` is in the requested origin set (see
-Permissions). It is not a fallback and there is no alternative: reading the
-token from a content script injected into the vault UI was rejected as a worse
-trade-off than a scoped cookie permission.
+on the url passed to `getAll()`, so for a `.cyberark.cloud` cookie Chrome
+checks the extension's permission against `https://cyberark.cloud/`, which a
+grant of the exact pcloud origin does not match. That whole problem exists
+only if the extension reads the cookie through `chrome.cookies`. It doesn't
+any more, so the constraint is gone with it.
 
-The worker reads the token with
-`chrome.cookies.getAll({ url: origins.pcloudOrigin })` — the `url` form, so it
-gets exactly the cookies that would be sent to the pcloud origin, parent-domain
-ones included — and selects the `XSRF-TOKEN-<guid>` cookie via
-`findXsrfCookie(cookies, targetHost)`. `targetHost` is the **hostname** of
-`origins.pcloudOrigin`, not the full origin url. Passing it is what activates
-the domain-specificity ranking: a host-scoped token beats a `.cyberark.cloud`
-one, and a token scoped to an unrelated tenant is excluded outright. Without
-it only the fail-closed-on-multiple-candidates path runs, which is wrong for a
-partner signed in to several tenants at once. Ambiguity still fails closed.
+If the vendor ever marks the cookie `HttpOnly`, or narrows it to a host-only
+cookie on the pcloud host, `document.cookie` in the marketplace frame stops
+showing it and the import **fails closed** with the diagnostic below. There is
+no fallback path and no retry. Recovering would mean going back to a cookie
+permission, or reading the token from a script injected into the vault UI —
+both strictly more access than what is here now, and neither is worth
+pre-building against a change that may never come.
 
-Cookie diagnostics report **names and domains only, never values** — this
-extension operates inside a live platform tenant's session, so a cookie
-value must never reach a log or the UI. The
-"no usable XSRF-TOKEN cookie" failure reports the cookie count `getAll`
-returned, the distinct cookie domains seen (`cookieDomains`, `src/csrf.ts`)
-and the XSRF-shaped candidate names (`xsrfCandidateNames` — candidate names
-only, so unrelated cookie names such as SSO tokens are never printed). Those
-three together separate "not readable at this permission scope" (no cookies,
-or no `.cyberark.cloud` domain among them) from "readable but nothing
-matched". The message is surfaced in the button label, which truncates at 120
-chars, so it stays terse and the target origin goes to the console only. The
-success path logs the selected cookie's name and domain to the console only,
-never the UI, to keep the scoping above grounded in observation.
+The worker selects the token with `findXsrfCookie(candidates)` from
+`src/csrf.ts`, called **without** a `targetHost`: `document.cookie` exposes no
+`domain` field, so there is nothing to rank candidates by, and that is the
+exactly-one-candidate-or-`null` branch. More than one candidate can belong to
+different tenants, so ambiguity fails closed rather than guessing. The content
+script's own filter is a bare `XSRF-TOKEN-` prefix test — deliberately looser
+than this, so the two cannot drift in the direction that silently drops a real
+token, and so that no unrelated cookie *value* crosses the message boundary.
+`findXsrfCookie` remains the authoritative `XSRF-TOKEN-<guid>` match.
 
-Open question: the correct request header **name** is still unknown. The
-code sends the token under both `X-XSRF-TOKEN` and `X-<cookie name>` (e.g.
-`X-XSRF-TOKEN-<guid>`), since an extra unrecognized header is harmless but a
-missing one fails the request. It works, but which header the server
-actually honours is unconfirmed — narrow it by removing one header at a
-time and re-testing.
+`readXsrfCookies` **skips empty values and dedupes on name+value**. An empty
+value is not a token but is a truthy candidate, so passing it on would send an
+empty `X-XSRF-TOKEN` and turn the clear diagnostic below into an opaque
+`HTTP 400 - CSRF validation failed`. The dedupe matters because an SPA can
+legitimately shadow the parent-domain SSO cookie with a host-only cookie of the
+same name: `document.cookie` then reports the same token twice, exposes no
+`domain` field to tell them apart, and `findXsrfCookie` would fail closed
+permanently on what is no ambiguity at all. Deduping on name+**value**, not on
+name alone, is the point — two genuinely different tokens under one name may
+belong to different tenants, and that must still fail closed.
+
+The worker validates the **element shape** of `msg.xsrfCookies`, not just that
+it is an array: entries without string `name` and `value` are filtered out, so
+a malformed entry cannot throw inside `findXsrfCookie` and surface as a generic
+unexpected error instead of the fail-closed CSRF message.
+
+Cookie diagnostics report **counts in the UI and names in the console only,
+never values anywhere** — this extension operates inside a live platform
+tenant's session. The cookie NAME carries the tenant session guid (the same
+reason the `X-<cookie name>` header was dropped), and the failure message is
+rendered into the button label on a page the vendor's own SPA occupies, so the
+name stays out of it. The "no usable XSRF-TOKEN cookie" failure reports two
+counts — how many `XSRF-TOKEN-` candidates the page yielded, and how many of
+those were guid-shaped (`xsrfCandidateNames`, `src/csrf.ts`). Those separate
+"nothing XSRF-shaped is visible to this frame at all" — the HttpOnly/host-only
+case above — from "candidates arrived but none matched the guid shape, or
+several did and it failed closed". The label truncates at 120 chars, so the
+message stays terse; the candidate names and the target origin go to the
+console only. The success path likewise logs the selected cookie's name to the
+console only, never the UI, never the value.
+
+**The request header is `X-XSRF-TOKEN`, and only that.** Established by
+probing a nonexistent path on the vault API — the CSRF middleware runs ahead
+of routing, so this was safe and decisive: no header returned
+`400 CSRF validation failed`; `X-XSRF-TOKEN` alone returned `404`, i.e. CSRF
+passed and only the route was missing; `X-<cookie name>` alone returned `400`.
+The code used to send both, which was harmless but pointless, and the second
+header leaked the session guid in a header name. It sends one now.
 
 ## Known limitations
 
@@ -472,15 +538,24 @@ time and re-testing.
   breakable by localisation).
 - The optional-permission flow has been exercised against a live tenant up to
   the grant: the confirmation dialog, the gesture-driven native prompt and the
-  grant all worked. The import then failed on the parent-domain cookie scope
-  (see Auth); the three-origin set that fixes it has not yet been re-run
-  end-to-end against a live tenant. The end-to-end import itself is confirmed
-  only under the old standing `host_permissions`.
+  grant all worked. The end-to-end import itself is confirmed only under the
+  old standing `host_permissions` and the old `chrome.cookies` CSRF path. The
+  current shape — two requested origins, the token read from `document.cookie`,
+  the destination derived from `sender.origin`, a single `X-XSRF-TOKEN` header
+  — has not been re-run end-to-end against a live tenant. Nothing about it is
+  covered by the unit tests, which only reach the pure functions in `src/`.
 - A granted tenant stays granted until revoked in `chrome://extensions`.
   Nothing in the extension surfaces or revokes grants, by design.
-- The service worker has a ~30s idle lifetime; the one artifact tested was
-  308 KB. A much larger artifact may need an offscreen document to survive
-  the fetch + base64 encode.
+- The service worker has a ~30s idle lifetime and a 30s cap on any single
+  `fetch()`; the one artifact tested was 308 KB. **Encode CPU is not the
+  binding constraint** — measured, `arrayBufferToBase64` costs ~45-50 ms/MB,
+  so encoding alone would not approach 30s until several hundred MB. Memory
+  is: peak heap is roughly 3.8x the artifact size, because the ArrayBuffer,
+  the latin1 binary string, the base64 string and the JSON request body are
+  all live at once (~470 MB for a 128 MB artifact). The S3 download is
+  subject to the same 30s single-fetch cap. An artifact in the tens of MB is
+  where this becomes a real risk, and an offscreen document or a streaming
+  encode would be needed.
 - Product type is inferred, not declared (see Classification). This is a
   heuristic derived from two observed payloads and may misclassify a shape
   not yet seen.
@@ -529,20 +604,18 @@ Firefox is revisited:
 - `background.service_worker` is unsupported on Firefox (Bugzilla
   1573659); it needs `background.scripts` with `"type": "module"` (Firefox
   112+). One manifest can serve all three browsers. ~1 hour of work.
-- Cookies may be *easier* on Firefox: MDN documents a host permission on a
-  subdomain permitting a parent-domain cookie read — the opposite of the
-  Chrome behaviour documented under Auth that forces the bare-apex
-  `https://cyberark.cloud/*` grant. Unverified against a live tenant; fails
-  closed if wrong.
-- Container tabs are a genuine Firefox-only risk that lands on this
-  extension's actual users — partners signed into multiple tenants at once
-  is the textbook Multi-Account Containers case. `cookies.getAll()` is
-  called with no `storeId`, so it queries only the default store; a small
-  fix threads `sender.tab.cookieStoreId` through. Worse: Bugzilla 1670278
-  (open) indicates a background `fetch` with `credentials: 'include'` may
-  not be scoped to a container's cookie jar at all, meaning the import POST
-  could silently use the wrong identity rather than failing closed. Needs
-  live testing; may not be cleanly fixable.
+- Cookie *reading* is no longer a Firefox concern at all: the token comes from
+  `document.cookie` in the content script, which behaves identically
+  everywhere. This obsoletes the earlier finding about Firefox's more
+  permissive `cookies` permission model, and the container-tab risk around
+  `cookies.getAll()` and its missing `storeId`.
+- Container tabs remain a Firefox-only risk on the *write* side, and it lands
+  on this extension's actual users — partners signed into multiple tenants at
+  once is the textbook Multi-Account Containers case. Bugzilla 1670278 (open)
+  indicates a background `fetch` with `credentials: 'include'` may not be
+  scoped to a container's cookie jar at all, meaning the import POST could
+  silently use the wrong identity rather than failing closed. Needs live
+  testing; may not be cleanly fixable.
 
 A `webextension-polyfill` dependency is not warranted for any of this — a
 3-line `var api = typeof browser !== "undefined" ? browser : chrome;` shim
@@ -619,4 +692,4 @@ never logged in the clear.
 
 Cookie and URL logging in the shipped extension follows the same policy:
 presigned/credentialed URLs are redacted before they ever reach a log, and
-cookie diagnostics report names and domains only, never values (see Auth).
+cookie diagnostics report names only, never values (see Auth).

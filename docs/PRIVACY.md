@@ -29,16 +29,17 @@ user clicks this button.
   expiring download link for the integration artifact and fetches the file bytes from the
   vendor's own content host.
 - **One cookie's value.** To satisfy your tenant's anti-CSRF (cross-site request forgery)
-  protection, the extension asks Chrome for the cookies visible to your Privilege Cloud host and
-  looks through their names for the one matching the pattern `XSRF-TOKEN-<id>` — the token your
-  tenant already sets in your browser. Only that cookie's value is ever used, and it is sent back
-  as a request header on the import request to that same tenant. No other cookie's value is read,
-  used, or transmitted. (A failure-only diagnostic message, written to the browser console and
-  never shown in the extension's UI, may note the *domain* — never the name or value — of other
-  cookies visible at that scope, to help tell "no token cookie present" apart from "token cookie
-  present but not matched.") The extension cannot read any cookie at all outside a tenant you have
-  explicitly approved, because Chrome only allows an extension to read cookies for websites it
-  currently has explicit permission to access (see Permissions, below).
+  protection, the extension reads the marketplace page's own cookies — the same ones that page's
+  JavaScript can already see — and keeps only the one whose name matches the pattern
+  `XSRF-TOKEN-<id>`, the token your tenant already set in your browser. Every other cookie's value
+  is discarded immediately and never leaves that page. The matched value is sent back as a request
+  header on the import request to that same tenant, and nowhere else. The extension does not use
+  Chrome's cookie API and does not hold the `cookies` permission, so it has no way to read cookies
+  for any site other than the marketplace page you are looking at. (If the import fails because no
+  usable token cookie was found, the extension's button reports *how many* token-shaped cookies it
+  saw — counts only, never a name and never a value — to help tell "no token cookie present" apart
+  from "token cookie present but not matched". Their *names* — still never their values — are
+  written to the browser console only.)
 
 ## What it transmits, and to whom
 
@@ -77,9 +78,9 @@ how it behaves can change after installation without a new version being publish
 
 ## Permissions, in plain language
 
-- **Reading cookies (`cookies` permission).** Used only to find and read the value of one
-  anti-CSRF token cookie (`XSRF-TOKEN-<id>`), and only for tenants you have explicitly approved
-  (see below).
+- **No browser permissions at all beyond site access.** The extension declares no Chrome API
+  permissions — no cookie access, no storage, no history, no downloads, nothing. The one cookie it
+  reads is read from the marketplace page itself, exactly as that page's own scripts could.
 - **Access to your tenant's site, granted one tenant at a time.** The extension does not have
   standing access to any site when first installed. The first time you use it against a given
   tenant, Chrome shows you a native permission prompt naming that exact tenant's address; nothing
