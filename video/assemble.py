@@ -78,6 +78,17 @@ def main() -> None:
     rail_html, _, _ = extract_div(shell, '<div class="rail">')
     header_cluster_html, _, _ = extract_div(shell, '<div class="header-cluster">')
 
+    # The header cluster is a real captured subtree (`<cyb-user-details-menu>`),
+    # not hand-drawn markup, since 2026-09-10. Guard on markers that are
+    # actually present in that capture rather than the hand-authored
+    # `bell-btn`/`bell-badge` classes it replaced.
+    assert "intercom-notification-count" in header_cluster_html, (
+        "header cluster fragment is missing the real notification-count marker"
+    )
+    assert "cyb-duotone-icon-notification-02" in header_cluster_html, (
+        "header cluster fragment is missing the real duotone bell-icon marker"
+    )
+
     # ------------------------------------------------------------------
     # 1. Head injection: GSAP + sizing / spinner / cursor CSS + the real
     #    shell-chrome stylesheet, all inserted right before </head>, after

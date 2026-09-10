@@ -32,6 +32,20 @@ Both are rendered from the same HyperFrames composition at
   `cyberark-ui-icons-duotone`/`cyberark-ui-icons-stroke` icon fonts (base64
   `@font-face`), real logo/setup-hexagon/sparkle SVGs.
 
+  The header cluster is the real captured `<cyb-user-details-menu>` subtree
+  plus the authored CSS rules that match it (pseudo-elements included), not
+  a reconstruction. It used to be hand-drawn from measured computed values,
+  and that failed repeatedly in ways measuring could not catch: the bell's
+  two-tone blue comes from `--color-icon-duotone-stroke` / `-fill` painted
+  on `::before`/`::after`, so the `<i>`'s own computed `color` reads a
+  misleading grey; and the gap between the avatar and the username is
+  produced inside the username box, so the two elements' bounding rects are
+  genuinely flush and a margin derived from them is zero. Capture the
+  subtree — do not re-derive it from `getComputedStyle`.
+  `video/assemble.py` asserts the fragment still contains
+  `intercom-notification-count` and `cyb-duotone-icon-notification-02`, so a
+  silent regression to hand-drawn markup fails the build.
+
 Both snapshots were captured against a real tenant and **sanitized to the
 placeholder tenant `acme-poc`** before being committed — the real tenant
 name never appears in either file, in the composition, or in the rendered
