@@ -12,15 +12,15 @@ Idira is Palo Alto Networks' rebrand of CyberArk. Marketplace and Privilege Clou
 
 A content script in the marketplace iframe fetches the product's presigned S3 download URL on the same origin, using cookies it already has, and reads the tenant's CSRF token from `document.cookie` — it isn't HttpOnly, so this needs no permission at all. The artifact fetch and the import POST happen in the service worker rather than the content script, because a content script isn't CORS-exempt but an MV3 service worker holding a host permission for the target is. The extension declares no API permissions, and the worker requests exactly the two origins an import needs — the tenant's Privilege Cloud host, derived from the origin of the frame that sent the message, and the artifact's S3 host, derived at runtime from the download URL and never hardcoded. Full permission and origin-derivation model: `CLAUDE.md`.
 
-## Screenshots
+## What it looks like
 
-The button is injected next to the vendor's own Download button, cloned from it so it inherits the portal's styling:
+![The full import flow: the Import into Privilege Cloud button injected beside the vendor's Download button, the confirmation dialog naming the product, kind and destination tenant, and the button settling into its Imported state](docs/images/import-flow-blog.gif)
 
-![The Import into Privilege Cloud button beside the vendor's Download button](docs/images/injected-button.png)
+The button is injected next to the vendor's own Download button, cloned from it so it inherits the portal's styling. Clicking it names the product, the package kind and the destination tenant before anything is written, because implementation partners are routinely signed in to several customer tenants at once. Only the dialog's Import button starts the request.
 
-Clicking it names the product, the package kind and the destination tenant before anything is written. The tenant shown here is a placeholder:
+The tenant shown is a placeholder. The Chrome permission prompt is omitted: `permissions.contains()` runs when the dialog opens, so a repeat import into an already-granted tenant never re-prompts.
 
-![The Bellhop confirmation dialog, naming the product, kind and destination tenant](docs/images/confirmation-dialog.png)
+A full-resolution version is at [`docs/images/import-flow.mp4`](docs/images/import-flow.mp4).
 
 ## Installing (no store listing yet)
 

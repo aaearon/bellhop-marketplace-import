@@ -31,10 +31,15 @@ tenant `<t>`:
 - Marketplace SPA: `https://<t>-marketplace.cyberark.cloud/`
 - PasswordVault: `https://<t>-pcloud.cyberark.cloud/PasswordVault/`
 
-All same-site (`cyberark.cloud`), all cross-origin. The marketplace SPA
-refuses to render as a top-level page ("You're missing the right
-permissions") — it must be framed by the shell, so it cannot be developed or
-tested standalone.
+All same-site (`cyberark.cloud`), all cross-origin. **The marketplace SPA
+does render as a top-level page**, navigated to directly, for a session that
+is already authenticated — confirmed 2026-09-10 while capturing DOM and CSS
+for the demo video. Earlier revisions of this file claimed it refuses to
+("You're missing the right permissions") and must be framed by the shell;
+that is wrong, and it wrongly ruled out standalone inspection. The shell
+renders top-level too. Both therefore give full DOM, CSSOM and computed-style
+access to browser automation, which is how the snapshots under
+`video/snapshots/` were captured (see Demo video).
 
 These are not two vendors' products stitched together — they are sibling
 subdomains of one platform tenant, one per service (shell, Marketplace,
@@ -422,13 +427,18 @@ via a `setButtonLabel` helper, falling back to plain `textContent` on the
 button — with a console warning at construction time — if that span is ever
 missing.
 
-Note for future debugging: the product page's DOM sits inside a doubly-nested
-cross-origin iframe (`<t>.cyberark.cloud` → `<t>-managespace.cyberark.cloud`
-→ `<t>-marketplace.cyberark.cloud`), which DOM-inspection browser-automation
-tools cannot reach into, returning only the shell's accessibility tree;
-console log capture does reach across that boundary, since `chrome.runtime`
-messages from the content script's own isolated-world execution surface
-there regardless of frame origin.
+Note for future debugging: as loaded through the shell, the product page's DOM
+sits inside a doubly-nested cross-origin iframe (`<t>.cyberark.cloud` →
+`<t>-managespace.cyberark.cloud` → `<t>-marketplace.cyberark.cloud`), which
+DOM-inspection browser-automation tools cannot reach into, returning only the
+shell's accessibility tree; console log capture does reach across that
+boundary, since `chrome.runtime` messages from the content script's own
+isolated-world execution surface there regardless of frame origin.
+
+That constraint is about the *nesting*, not the page: navigating directly to
+`<t>-marketplace.cyberark.cloud` renders the same SPA top-level, where DOM and
+computed styles are fully readable (see Tenant URL structure). Reach for that
+before assuming the page cannot be inspected.
 
 ## Auth
 
@@ -704,6 +714,40 @@ character would reduce to a cap-shaped blob. `tools/make-icons.py`
 regenerates the entire set (icon16/32/48/128.png + preview.png) standalone
 from inline SVG source via ImageMagick `convert` + Pillow; run
 `python3 tools/make-icons.py` after any artwork change.
+
+## Demo video
+
+`docs/images/import-flow.{mp4,gif}` show the import flow end to end — the
+injected button, the confirmation dialog, and the success label. They are a
+*reconstruction*, deliberately: showing a real success state would mean a real
+write into a live production tenant, which the capture workflow forbids. The
+Chrome permission prompt is absent for a real reason, not a cheat —
+`permissions.contains()` at dialog-open short-circuits the request on a repeat
+import into an already-granted tenant (see Permissions).
+
+Built by `video/assemble.py` from two frozen DOM snapshots under
+`video/snapshots/`, rendered with HyperFrames; `video/README.md` has the
+regeneration steps and the per-file detail. Three conventions matter beyond
+that file:
+
+- **Capture, never redraw.** Both snapshots are real DOM plus the authored CSS
+  that matches it, with fonts and images inlined. The shell's header cluster
+  was originally hand-built from `getComputedStyle` measurements and had to be
+  rebuilt twice, because two of its properties cannot be read that way at all:
+  the duotone icons take their colour from `::before`/`::after` layers, so the
+  element's own computed `color` is misleading; and the avatar-to-username gap
+  lives inside the username box, so the two bounding rects are genuinely flush
+  and any margin derived from them is zero. `assemble.py` asserts the captured
+  markers are still present so a regression to hand-drawn markup fails the
+  build.
+- **Sanitize at capture time.** The snapshots are committed with the tenant
+  rewritten to the placeholder `acme-poc`. Verify with a text grep over
+  `video/` and `docs/` *and* a binary grep over the rendered mp4/gif — the
+  video is where a leak would be least visible.
+- **`docs/` is a public Pages site** (see Conventions), so anything added under
+  `docs/images/` is published on push. `import-flow-blog.gif` is a 672px
+  variant sized for a specific blog column; `video/README.md` explains why that
+  width and why it is rendered from a narrower canvas rather than downscaled.
 
 ## Conventions
 
