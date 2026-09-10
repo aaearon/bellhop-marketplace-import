@@ -119,6 +119,49 @@ cp video/composition/renders/import-flow.mp4 docs/images/import-flow.mp4
 cp video/composition/renders/import-flow.gif docs/images/import-flow.gif
 ```
 
+## The blog variant (`docs/images/import-flow-blog.gif`)
+
+`timschindler.blog` renders post images in a 672px column (Hashnode on a
+Next.js/Tailwind frontend; the body wrapper is `max-w-2xl` = 42rem, and
+Preflight's `img { max-width: 100% }` caps anything wider). `devicePixelRatio`
+is 1 and the theme serves no `srcset`, so there is no retina headroom — a
+GIF wider than 672px is simply downscaled by the browser and pays for
+bytes it cannot show.
+
+The default 1920x1080 render lands at 0.35x in that column, which makes the
+button and dialog text illegible. The blog variant is therefore rendered on
+a narrower canvas so the page lays out more compactly, then converted at
+exactly the column width:
+
+```bash
+# 1280x720 canvas -> a separate composition file (git-ignored).
+python3 video/assemble.py --width 1280 --height 720 \
+  --out video/composition/index-blog.html
+
+# hyperframes renders whichever index.html is in the composition dir, so
+# swap it in, render, and swap back.
+cd video/composition
+cp index.html index-full.bak && cp index-blog.html index.html
+npx --yes hyperframes render -o renders/blog-probe.mp4
+cp index-full.bak index.html && rm index-full.bak
+cd ../..
+
+# Convert at the column width. A generated palette matters: the default
+# 256-colour quantisation banks flat UI fills badly.
+ffmpeg -y -i video/composition/renders/blog-probe.mp4 \
+  -vf "fps=15,scale=672:-1:flags=lanczos,split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=3" \
+  docs/images/import-flow-blog.gif
+```
+
+`--width`/`--height`/`--out` default to 1920/1080 and
+`video/composition/index.html`, so a bare `python3 video/assemble.py` still
+reproduces the full-size composition byte-for-byte. Verify with an md5 of
+`index.html` before and after if you touch the argument handling.
+
+Rendering the same 1280 source at 672 rather than shipping it at 1280 is
+worth roughly 2.4x in file size (244 KB vs 598 KB) for pixel-identical
+display in that column.
+
 `npm run check` (from `video/composition/`) is worth running after any
 edit to `video/assemble.py` — it lints the generated composition (GSAP
 usage, runtime, layout, motion, contrast). Expect one pre-existing false

@@ -23,18 +23,32 @@ scaffolded by `hyperframes init`; see video/README.md).
 
 Usage:
     python3 video/assemble.py
+    python3 video/assemble.py --width 1280 --height 720 --out video/composition/index-blog.html
 """
+import argparse
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 SNAP_PATH = SCRIPT_DIR / "snapshots" / "marketplace-product-page.html"
 SHELL_PATH = SCRIPT_DIR / "snapshots" / "shell-chrome.html"
-OUT_PATH = SCRIPT_DIR / "composition" / "index.html"
+DEFAULT_OUT_PATH = SCRIPT_DIR / "composition" / "index.html"
+DEFAULT_WIDTH = 1920
+DEFAULT_HEIGHT = 1080
 
 # Measured from shell-chrome.html's own CSS (`.rail { width: 72px }`) — the
-# real rail width. The marketplace content is offset by exactly this much so
+# real rail width. It is an intrinsic width of the captured fragment, not a
+# fraction of the canvas, so it does not scale with --width/--height; the
+# marketplace content is offset by exactly this much at any canvas size so
 # rail and content neither overlap nor leave a gap.
 RAIL_WIDTH_PX = 72
+
+# Reference resting position of the synthetic demo cursor before the timeline
+# starts moving it, measured against the original 1920x1080 canvas. Scaled
+# proportionally for other canvas sizes so the cursor still starts in a
+# sensible spot relative to the frame instead of landing off-canvas on a
+# narrower render.
+CURSOR_START_REF_X = 1180
+CURSOR_START_REF_Y = 660
 
 
 def extract_div(html: str, open_tag_marker: str) -> tuple[str, int, int]:
@@ -59,7 +73,28 @@ def extract_div(html: str, open_tag_marker: str) -> tuple[str, int, int]:
                 return html[start:i], start, i
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--width", type=int, default=DEFAULT_WIDTH,
+                         help=f"composition canvas width in px (default: {DEFAULT_WIDTH})")
+    parser.add_argument("--height", type=int, default=DEFAULT_HEIGHT,
+                         help=f"composition canvas height in px (default: {DEFAULT_HEIGHT})")
+    parser.add_argument("--out", type=Path, default=DEFAULT_OUT_PATH,
+                         help=f"output path for the composed HTML (default: {DEFAULT_OUT_PATH})")
+    return parser.parse_args()
+
+
 def main() -> None:
+    args = parse_args()
+    width = args.width
+    height = args.height
+    out_path = args.out
+
+    # Proportional scale of the cursor's reference resting position, rounded
+    # to the nearest px.
+    cursor_start_x = round(CURSOR_START_REF_X * width / DEFAULT_WIDTH)
+    cursor_start_y = round(CURSOR_START_REF_Y * height / DEFAULT_HEIGHT)
+
     snap = SNAP_PATH.read_text(encoding="utf-8")
     shell = SHELL_PATH.read_text(encoding="utf-8")
 
@@ -100,8 +135,8 @@ def main() -> None:
     head_inject = f"""
 <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
 <style id="hf-plumbing-css">
-  html, body {{ width: 1920px !important; height: 1080px !important; overflow: hidden !important; margin: 0 !important; }}
-  #hf-root {{ position: relative; width: 1920px; height: 1080px; overflow: hidden; background: #ffffff; }}
+  html, body {{ width: {width}px !important; height: {height}px !important; overflow: hidden !important; margin: 0 !important; }}
+  #hf-root {{ position: relative; width: {width}px; height: {height}px; overflow: hidden; background: #ffffff; }}
 
   /* Real marketplace content, offset by the real rail width so it neither
      overlaps the rail nor leaves a gap. */
@@ -138,7 +173,7 @@ def main() -> None:
     body_open = (
         "<body>\n"
         '<div id="hf-root" class="clip" data-composition-id="main" data-start="0" '
-        'data-duration="10.5" data-width="1920" data-height="1080">\n'
+        f'data-duration="10.5" data-width="{width}" data-height="{height}">\n'
         + rail_html + "\n"
         + header_cluster_html + "\n"
         + '<div class="hf-marketplace-frame">\n'
@@ -302,7 +337,7 @@ def main() -> None:
   function finishImported(btn) { setLabel(btn, "Imported ✓"); }
 
   var tl = gsap.timeline({ paused: true });
-  tl.set(cursor, { x: 1180, y: 660, scale: 1 }, 0);
+  tl.set(cursor, { x: __CURSOR_START_X__, y: __CURSOR_START_Y__, scale: 1 }, 0);
 
   tl.to(cursor, { x: triggerX - CURSOR_TIP_X, y: triggerY - CURSOR_TIP_Y, duration: 1.2, ease: "power2.inOut" }, 0);
 
@@ -328,13 +363,17 @@ def main() -> None:
 </script>
 """
 
+    cursor_and_script = cursor_and_script.replace(
+        "__CURSOR_START_X__", str(cursor_start_x)
+    ).replace("__CURSOR_START_Y__", str(cursor_start_y))
+
     anchor = "<!--\n      This HTML file is a template."
     assert snap.count(anchor) == 1, "expected exactly one trailing boilerplate comment anchor"
     snap = snap.replace(anchor, cursor_and_script + anchor, 1)
 
-    OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    OUT_PATH.write_text(snap, encoding="utf-8")
-    print(f"wrote {OUT_PATH} ({len(snap)} bytes)")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(snap, encoding="utf-8")
+    print(f"wrote {out_path} ({len(snap)} bytes)")
 
 
 if __name__ == "__main__":
